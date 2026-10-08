@@ -1,0 +1,50 @@
+{
+  "name": "مركز حسين الاسدي - لخدمات وتبديل الزيوت",
+  "short_name": "الاسدي للزيوت",
+  "description": "النظام المتكامل لإدارة خدمات تبديل الزيوت، المبيعات المباشرة، وحسابات المركبات",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait-primary",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "كاونتر الخدمة السريع",
+      "short_name": "الخدمة السريعة",
+      "description": "تسجيل موعد وتبديل زيت فوري",
+      "url": "/pos",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "المبيعات المباشرة",
+      "short_name": "البيع المباشر",
+      "description": "بيع عبوات ومواد دون حجز",
+      "url": "/direct-sales",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "المخزون باللتر",
+      "short_name": "المخزون",
+      "description": "جرد براميل وعبوات الزيوت",
+      "url": "/inventory",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+    }
+  ]
+}
