@@ -18,6 +18,8 @@ export const viewport: Viewport = {
   userScalable: false,
 };
 
+import { AuthProvider } from '@/context/AuthContext';
+
 export default function RootLayout({
   children,
 }: {
@@ -34,7 +36,9 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-screen bg-industrial-950 text-slate-100 flex flex-col antialiased selection:bg-brand-amber selection:text-black">
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );

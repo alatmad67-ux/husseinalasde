@@ -430,3 +430,51 @@ export async function getProductsList(): Promise<ProductDoc[]> {
     return [];
   }
 }
+
+// ==============================================================================
+// 8. ADD NEW PRODUCT (إضافة منتج جديد للمخزون)
+// ==============================================================================
+export async function addProduct(product: Omit<ProductDoc, 'id'>) {
+  try {
+    const docRef = await addDoc(collection(db, 'products'), {
+      ...product,
+      createdAt: serverTimestamp()
+    });
+    return { success: true, id: docRef.id };
+  } catch (error) {
+    console.error('Error in addProduct:', error);
+    throw error;
+  }
+}
+
+// ==============================================================================
+// 9. UPDATE PRODUCT / STOCK (تعديل منتج أو تحديث الرصيد)
+// ==============================================================================
+export async function updateProduct(id: string, updates: Partial<ProductDoc>) {
+  try {
+    const productRef = doc(db, 'products', id);
+    await updateDoc(productRef, {
+      ...updates,
+      updatedAt: serverTimestamp()
+    });
+    return { success: true };
+  } catch (error) {
+    console.error('Error in updateProduct:', error);
+    throw error;
+  }
+}
+
+// ==============================================================================
+// 10. DELETE PRODUCT (حذف منتج من المخزون)
+// ==============================================================================
+export async function deleteProduct(id: string) {
+  try {
+    const { deleteDoc } = await import('firebase/firestore');
+    const productRef = doc(db, 'products', id);
+    await deleteDoc(productRef);
+    return { success: true };
+  } catch (error) {
+    console.error('Error in deleteProduct:', error);
+    throw error;
+  }
+}

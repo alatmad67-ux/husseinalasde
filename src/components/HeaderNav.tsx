@@ -10,11 +10,14 @@ import {
   Users, 
   Download, 
   ShieldCheck, 
-  Car
+  Car,
+  LogOut
 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 
 export default function HeaderNav() {
   const pathname = usePathname();
+  const { isAuthenticated, logout } = useAuth();
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [canInstall, setCanInstall] = useState(false);
 
@@ -114,6 +117,17 @@ export default function HeaderNav() {
               <Car className="w-3.5 h-3.5 text-brand-amber" />
               <span>معاينة ملصق QR</span>
             </Link>
+
+            {isAuthenticated && (
+              <button
+                onClick={logout}
+                title="تسجيل الخروج"
+                className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 bg-industrial-800/80 hover:bg-red-950/40 px-2.5 py-1.5 rounded-lg border border-red-900/50 transition font-bold"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">خروج</span>
+              </button>
+            )}
           </div>
 
         </div>
