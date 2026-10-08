@@ -139,7 +139,8 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
         throw new Error('المنتج المحدد غير موجود في قاعدة البيانات');
       }
 
-      currentStock = Number(productSnap.data().totalLitersStock || 0);
+      const pData = productSnap.data() as any;
+      currentStock = Number(pData?.totalLitersStock || 0);
       if (currentStock < oilLitersUsed) {
         throw new Error(
           `رصيد المخزون غير كافٍ. المتاح حالياً (${currentStock} لتر) بينما المطلوب (${oilLitersUsed} لتر).`
@@ -198,8 +199,9 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
     });
 
     // 6. Write: Update Customer Debt & Loyalty (+10 points per oil change)
-    const currentCustomerDebt = Number(customerSnap.data().totalDebt || 0);
-    const currentLoyalty = Number(customerSnap.data().loyaltyPoints || 0);
+    const customerData = customerSnap.data() as any;
+    const currentCustomerDebt = Number(customerData?.totalDebt || 0);
+    const currentLoyalty = Number(customerData?.loyaltyPoints || 0);
 
     transaction.update(customerRef, {
       totalDebt: currentCustomerDebt + (debtAmount > 0 ? debtAmount : 0),
@@ -234,7 +236,8 @@ export async function recordDirectSale(saleData: Omit<DirectSaleDoc, 'id' | 'sal
         throw new Error(`المنتج (${item.productName}) غير موجود`);
       }
 
-      const available = Number(pSnap.data().totalLitersStock || 0);
+      const pData = pSnap.data() as any;
+      const available = Number(pData?.totalLitersStock || 0);
       if (available < item.quantity) {
         throw new Error(`الكمية غير متوفرة في المخزن للمنتج (${item.productName}). المتاح: ${available}`);
       }
@@ -252,7 +255,8 @@ export async function recordDirectSale(saleData: Omit<DirectSaleDoc, 'id' | 'sal
       customerRef = doc(db, 'customers', customerId);
       const cSnap = await transaction.get(customerRef);
       if (cSnap.exists()) {
-        customerDebt = Number(cSnap.data().totalDebt || 0);
+        const cData = cSnap.data() as any;
+        customerDebt = Number(cData?.totalDebt || 0);
       }
     }
 
@@ -394,7 +398,8 @@ export async function recordDebtPayment(customerId: string, amountPaid: number, 
       throw new Error('ملف الزبون غير موجود');
     }
 
-    const currentDebt = Number(customerSnap.data().totalDebt || 0);
+    const cData = customerSnap.data() as any;
+    const currentDebt = Number(cData?.totalDebt || 0);
     const updatedDebt = Math.max(0, currentDebt - amountPaid);
 
     const paymentRef = doc(collection(db, 'debt_payments'));
