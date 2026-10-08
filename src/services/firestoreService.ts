@@ -101,6 +101,94 @@ export async function searchCustomerOrVehicle(queryStr: string) {
 }
 
 // ==============================================================================
+// 1.1 CREATE NEW CUSTOMER WITH VEHICLE (إنشاء ملف زبون جديد مع مركبته)
+// ==============================================================================
+export async function createCustomerWithVehicle(data: {
+  fullName: string;
+  phoneNumber: string;
+  makeModel: string;
+  plateNumber: string;
+  engineSize: string;
+  modelYear: number;
+  lastOdometer?: number;
+  preferredOil?: string;
+  preferredFilter?: string;
+}) {
+  try {
+    const { fullName, phoneNumber, makeModel, plateNumber, engineSize, modelYear, lastOdometer, preferredOil, preferredFilter } = data;
+
+    // Check if customer with phone already exists
+    const custRef = collection(db, 'customers');
+    const existingSnap = await getDocs(query(custRef, where('phoneNumber', '==', phoneNumber.trim()), limit(1)));
+    
+    let customerId = '';
+    if (!existingSnap.empty) {
+      customerId = existingSnap.docs[0].id;
+    } else {
+      const newCust = await addDoc(custRef, {
+        fullName: fullName.trim(),
+        phoneNumber: phoneNumber.trim(),
+        loyaltyPoints: 0,
+        totalDebt: 0,
+        createdAt: serverTimestamp()
+      });
+      customerId = newCust.id;
+    }
+
+    // Generate clean QR code identifier
+    const qrCodeId = `${plateNumber.replace(/\s+/g, '-').replace(/[^\w-]/g, '')}-${Date.now().toString().slice(-4)}`;
+
+    // Create Vehicle
+    const vehRef = await addDoc(collection(db, 'vehicles'), {
+      customerId,
+      makeModel: makeModel.trim(),
+      plateNumber: plateNumber.trim(),
+      engineSize: engineSize.trim(),
+      modelYear: Number(modelYear) || new Date().getFullYear(),
+      lastOdometer: Number(lastOdometer) || 0,
+      nextOdometer: (Number(lastOdometer) || 0) + 7000,
+      lastServiceDate: serverTimestamp(),
+      preferredOil: preferredOil || '',
+      preferredFilter: preferredFilter || '',
+      qrCodeId
+    });
+
+    const createdCustomer: CustomerDoc = {
+      id: customerId,
+      fullName: fullName.trim(),
+      phoneNumber: phoneNumber.trim(),
+      loyaltyPoints: 0,
+      totalDebt: 0,
+      createdAt: new Date().toISOString()
+    };
+
+    const createdVehicle: VehicleDoc = {
+      id: vehRef.id,
+      customerId,
+      makeModel: makeModel.trim(),
+      plateNumber: plateNumber.trim(),
+      engineSize: engineSize.trim(),
+      modelYear: Number(modelYear) || new Date().getFullYear(),
+      lastOdometer: Number(lastOdometer) || 0,
+      nextOdometer: (Number(lastOdometer) || 0) + 7000,
+      lastServiceDate: new Date().toISOString(),
+      preferredOil: preferredOil || '',
+      preferredFilter: preferredFilter || '',
+      qrCodeId
+    };
+
+    return {
+      success: true,
+      customer: createdCustomer,
+      vehicle: createdVehicle
+    };
+  } catch (error) {
+    console.error('Error in createCustomerWithVehicle:', error);
+    throw error;
+  }
+}
+
+// ==============================================================================
 // 2. RECORD SERVICE VISIT (Atomic Transaction)
 // - Deducts fractional oil liters from products.totalLitersStock
 // - Records service_visits doc
