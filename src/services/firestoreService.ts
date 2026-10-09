@@ -223,16 +223,16 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       productRef = doc(db, 'products', oilProductId);
       const productSnap = await transaction.get(productRef);
 
-      if (!productSnap.exists()) {
-        throw new Error('المنتج المحدد غير موجود في قاعدة البيانات');
-      }
-
-      const pData = productSnap.data() as any;
-      currentStock = Number(pData?.totalLitersStock || 0);
-      if (currentStock < oilLitersUsed) {
-        throw new Error(
-          `رصيد المخزون غير كافٍ. المتاح حالياً (${currentStock} لتر) بينما المطلوب (${oilLitersUsed} لتر).`
-        );
+      if (productSnap.exists()) {
+        const pData = productSnap.data() as any;
+        currentStock = Number(pData?.totalLitersStock || 0);
+        if (currentStock < oilLitersUsed) {
+          throw new Error(
+            `رصيد المخزون غير كافٍ. المتاح حالياً (${currentStock} لتر) بينما المطلوب (${oilLitersUsed} لتر).`
+          );
+        }
+      } else {
+        productRef = null;
       }
     }
 
@@ -509,9 +509,31 @@ export async function recordDebtPayment(customerId: string, amountPaid: number, 
 // ==============================================================================
 // 7. GET ALL PRODUCTS
 // ==============================================================================
+// Initial catalog used to bootstrap empty Firestore
+const DEFAULT_INITIAL_PRODUCTS: Omit<ProductDoc, 'id'>[] = [
+  { name: 'Mobil 1 ESP 5W-30 (تخليقي بالكامل)', category: 'engine_oil', viscosity: '5W30', packageSizeLiters: 5, totalLitersStock: 50.0, unitCost: 9000, salePrice: 12000 },
+  { name: 'Castrol Magnatec 10W-40', category: 'engine_oil', viscosity: '10W40', packageSizeLiters: 4, totalLitersStock: 40.0, unitCost: 7000, salePrice: 9500 },
+  { name: 'Liqui Moly Molygen 5W-40', category: 'engine_oil', viscosity: '5W40', packageSizeLiters: 5, totalLitersStock: 30.0, unitCost: 10500, salePrice: 13500 },
+  { name: 'Toyota Genuine ATF WS (دهن گير)', category: 'gear_oil', viscosity: 'ATF WS', packageSizeLiters: 4, totalLitersStock: 25.0, unitCost: 11000, salePrice: 15000 },
+  { name: 'فلتر زيت أصلي تويوتا', category: 'filter', viscosity: '90915-YZZE2', packageSizeLiters: 1, totalLitersStock: 30, unitCost: 4500, salePrice: 7000 },
+  { name: 'ماء راديتر بريستون أصلي 50/50 أمريكي', category: 'coolant', viscosity: 'Prestone Red', packageSizeLiters: 4, totalLitersStock: 20.0, unitCost: 10000, salePrice: 14000 }
+];
+
 export async function getProductsList(): Promise<ProductDoc[]> {
   try {
     const productsSnap = await getDocs(collection(db, 'products'));
+    if (productsSnap.empty) {
+      // Auto-populate default products to Firestore on first run
+      const seeded: ProductDoc[] = [];
+      for (const item of DEFAULT_INITIAL_PRODUCTS) {
+        const docRef = await addDoc(collection(db, 'products'), {
+          ...item,
+          createdAt: serverTimestamp()
+        });
+        seeded.push({ id: docRef.id, ...item });
+      }
+      return seeded;
+    }
     return productsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as ProductDoc));
   } catch (error) {
     console.error('Error in getProductsList:', error);
