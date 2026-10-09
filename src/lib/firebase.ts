@@ -14,7 +14,9 @@ const firebaseConfig = {
 
 // Initialize Firebase with singleton pattern for Next.js
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-const db = getFirestore(app);
+
+// Connect explicitly to the "default" database ID created in Firebase Console
+const db = getFirestore(app, "default");
 
 export { app, db };
 export default db;
