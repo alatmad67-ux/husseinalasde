@@ -24,7 +24,8 @@ import {
 } from '@/types/firestore';
 
 // ==============================================================================
-// 1. SEARCH CUSTOMER OR VEHICLE (Returns Customer + All their Registered Vehicles)
+// 1. FAST PARALLEL SEARCH CUSTOMER OR VEHICLE
+// Runs phone, plate, and name queries concurrently via Promise.all for instant speed
 // ==============================================================================
 export async function searchCustomerOrVehicle(queryStr: string): Promise<{
   customer: CustomerDoc;
@@ -38,70 +39,50 @@ export async function searchCustomerOrVehicle(queryStr: string): Promise<{
     const customersRef = collection(db, 'customers');
     const vehiclesRef = collection(db, 'vehicles');
 
-    // 1. Try querying customers by exact phone number
-    const phoneQ = query(customersRef, where('phoneNumber', '==', cleanQuery), limit(1));
-    const phoneSnap = await getDocs(phoneQ);
+    const [phoneSnap, plateSnap, nameSnap] = await Promise.all([
+      getDocs(query(customersRef, where('phoneNumber', '==', cleanQuery), limit(1))),
+      getDocs(query(vehiclesRef, where('plateNumber', '==', cleanQuery), limit(1))),
+      getDocs(
+        query(
+          customersRef,
+          where('fullName', '>=', cleanQuery),
+          where('fullName', '<=', cleanQuery + '\uf8ff'),
+          limit(1)
+        )
+      )
+    ]);
 
+    // 1. Match by Phone
     if (!phoneSnap.empty) {
       const customerDoc = phoneSnap.docs[0];
       const customerData = { id: customerDoc.id, ...customerDoc.data() } as CustomerDoc;
-
-      const vehQ = query(vehiclesRef, where('customerId', '==', customerDoc.id));
-      const vehSnap = await getDocs(vehQ);
+      const vehSnap = await getDocs(query(vehiclesRef, where('customerId', '==', customerDoc.id)));
       const vehicles = vehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
-
-      return {
-        customer: customerData,
-        vehicles,
-        vehicle: vehicles[0] || null
-      };
+      return { customer: customerData, vehicles, vehicle: vehicles[0] || null };
     }
 
-    // 2. Try querying vehicles by plate number
-    const plateQ = query(vehiclesRef, where('plateNumber', '==', cleanQuery), limit(1));
-    const plateSnap = await getDocs(plateQ);
-
+    // 2. Match by Plate Number
     if (!plateSnap.empty) {
       const matchedVehDoc = plateSnap.docs[0];
       const matchedVehicle = { id: matchedVehDoc.id, ...matchedVehDoc.data() } as VehicleDoc;
-
-      const customerSnap = await getDoc(doc(db, 'customers', matchedVehicle.customerId));
+      const [customerSnap, allVehSnap] = await Promise.all([
+        getDoc(doc(db, 'customers', matchedVehicle.customerId)),
+        getDocs(query(vehiclesRef, where('customerId', '==', matchedVehicle.customerId)))
+      ]);
       if (customerSnap.exists()) {
         const customerData = { id: customerSnap.id, ...customerSnap.data() } as CustomerDoc;
-        const allVehQ = query(vehiclesRef, where('customerId', '==', customerSnap.id));
-        const allVehSnap = await getDocs(allVehQ);
         const vehicles = allVehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
-
-        return {
-          customer: customerData,
-          vehicles,
-          vehicle: matchedVehicle
-        };
+        return { customer: customerData, vehicles, vehicle: matchedVehicle };
       }
     }
 
-    // 3. Fallback: Query customer by fullName prefix
-    const nameQ = query(
-      customersRef,
-      where('fullName', '>=', cleanQuery),
-      where('fullName', '<=', cleanQuery + '\uf8ff'),
-      limit(1)
-    );
-    const nameSnap = await getDocs(nameQ);
-
+    // 3. Match by Name
     if (!nameSnap.empty) {
       const customerDoc = nameSnap.docs[0];
       const customerData = { id: customerDoc.id, ...customerDoc.data() } as CustomerDoc;
-
-      const vehQ = query(vehiclesRef, where('customerId', '==', customerDoc.id));
-      const vehSnap = await getDocs(vehQ);
+      const vehSnap = await getDocs(query(vehiclesRef, where('customerId', '==', customerDoc.id)));
       const vehicles = vehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
-
-      return {
-        customer: customerData,
-        vehicles,
-        vehicle: vehicles[0] || null
-      };
+      return { customer: customerData, vehicles, vehicle: vehicles[0] || null };
     }
 
     return null;
@@ -733,7 +714,16 @@ const DEFAULT_INITIAL_PRODUCTS: Omit<ProductDoc, 'id'>[] = [
   }
 ];
 
-export async function getProductsList(): Promise<ProductDoc[]> {
+// In-memory cache for ultra-fast POS switching
+let cachedProducts: ProductDoc[] | null = null;
+let lastProductsFetch = 0;
+
+export async function getProductsList(forceRefresh = false): Promise<ProductDoc[]> {
+  const now = Date.now();
+  if (!forceRefresh && cachedProducts && now - lastProductsFetch < 60000) {
+    return cachedProducts;
+  }
+
   try {
     const productsSnap = await getDocs(collection(db, 'products'));
     if (productsSnap.empty) {
@@ -745,12 +735,17 @@ export async function getProductsList(): Promise<ProductDoc[]> {
         });
         seeded.push({ id: docRef.id, ...item });
       }
+      cachedProducts = seeded;
+      lastProductsFetch = Date.now();
       return seeded;
     }
-    return productsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as ProductDoc));
+    const list = productsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as ProductDoc));
+    cachedProducts = list;
+    lastProductsFetch = Date.now();
+    return list;
   } catch (error) {
     console.error('Error in getProductsList:', error);
-    return [];
+    return cachedProducts || [];
   }
 }
 
@@ -760,6 +755,7 @@ export async function addProduct(product: Omit<ProductDoc, 'id'>) {
       ...product,
       createdAt: serverTimestamp()
     });
+    cachedProducts = null; // invalidate cache
     return { success: true, id: docRef.id };
   } catch (error) {
     console.error('Error in addProduct:', error);
@@ -774,6 +770,7 @@ export async function updateProduct(id: string, updates: Partial<ProductDoc>) {
       ...updates,
       updatedAt: serverTimestamp()
     });
+    cachedProducts = null;
     return { success: true };
   } catch (error) {
     console.error('Error in updateProduct:', error);
@@ -785,9 +782,112 @@ export async function deleteProduct(id: string) {
   try {
     const productRef = doc(db, 'products', id);
     await deleteDoc(productRef);
+    cachedProducts = null;
     return { success: true };
   } catch (error) {
     console.error('Error in deleteProduct:', error);
     throw error;
   }
+}
+
+// ==============================================================================
+// 8. GET ALL DEBTORS & TOTAL DEBTS (كشف جميع الزبائن المديونين ومجموع الديون)
+// ==============================================================================
+export async function getAllDebtorsSummary() {
+  try {
+    const custSnap = await getDocs(collection(db, 'customers'));
+    const allCustomers = custSnap.docs.map(d => ({ id: d.id, ...d.data() } as CustomerDoc));
+    const debtors = allCustomers.filter(c => Number(c.totalDebt || 0) > 0);
+    const totalDebtSum = debtors.reduce((acc, c) => acc + Number(c.totalDebt || 0), 0);
+
+    return {
+      totalCustomersCount: allCustomers.length,
+      debtorsCount: debtors.length,
+      totalDebtSum,
+      debtors,
+      allCustomers
+    };
+  } catch (error) {
+    console.error('Error in getAllDebtorsSummary:', error);
+    return {
+      totalCustomersCount: 0,
+      debtorsCount: 0,
+      totalDebtSum: 0,
+      debtors: [],
+      allCustomers: []
+    };
+  }
+}
+
+// ==============================================================================
+// 9. GET COMPREHENSIVE ANALYTICS & DUE VEHICLES REPORT
+// ==============================================================================
+export async function getWorkshopReportsData() {
+  try {
+    const [visitsSnap, directSnap, productsList, custSnap, vehSnap] = await Promise.all([
+      getDocs(collection(db, 'service_visits')),
+      getDocs(collection(db, 'direct_sales')),
+      getProductsList(),
+      getDocs(collection(db, 'customers')),
+      getDocs(collection(db, 'vehicles'))
+    ]);
+
+    const visits = visitsSnap.docs.map(d => ({ id: d.id, ...d.data() } as ServiceVisitDoc));
+    const directSales = directSnap.docs.map(d => ({ id: d.id, ...d.data() } as DirectSaleDoc));
+    const customers = custSnap.docs.map(d => ({ id: d.id, ...d.data() } as CustomerDoc));
+    const vehicles = vehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
+
+    return {
+      visits,
+      directSales,
+      products: productsList,
+      customers,
+      vehicles
+    };
+  } catch (error) {
+    console.error('Error in getWorkshopReportsData:', error);
+    return {
+      visits: [],
+      directSales: [],
+      products: [],
+      customers: [],
+      vehicles: []
+    };
+  }
+}
+
+// Helper to format Firestore Timestamp or ISO date into Arabic readable date + time
+export function formatExactDateTime(ts: any): string {
+  if (!ts) return new Date().toLocaleString('ar-IQ');
+  try {
+    if (typeof ts === 'string') {
+      const d = new Date(ts);
+      if (!isNaN(d.getTime())) return d.toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+      return ts;
+    }
+    if (ts.toDate && typeof ts.toDate === 'function') {
+      return ts.toDate().toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+    }
+    if (ts.seconds) {
+      return new Date(ts.seconds * 1000).toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+    }
+    return new Date().toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+  } catch {
+    return new Date().toLocaleString('ar-IQ');
+  }
+}
+
+export function getRawDateMillis(ts: any): number {
+  if (!ts) return Date.now();
+  if (typeof ts === 'string') {
+    const t = new Date(ts).getTime();
+    return isNaN(t) ? Date.now() : t;
+  }
+  if (ts.toDate && typeof ts.toDate === 'function') {
+    return ts.toDate().getTime();
+  }
+  if (ts.seconds) {
+    return ts.seconds * 1000;
+  }
+  return Date.now();
 }

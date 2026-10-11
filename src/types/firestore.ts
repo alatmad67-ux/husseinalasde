@@ -20,6 +20,7 @@ export interface VehicleDoc {
   preferredOil?: string;
   preferredFilter?: string;
   qrCodeId: string;
+  updatedAt?: any;
 }
 
 export type ProductCategory = 
@@ -73,13 +74,18 @@ export interface ServiceVisitDoc {
   oilName: string;
   viscosity?: string;
   oilLitersUsed: number;
+  oilUnitPrice?: number;
+  oilTotalPrice?: number;
   // Filter
   filterCode?: string;
+  filterPrice?: number;
   // Gear Oil (ATF / CVT / Manual)
   gearOilProductId?: string;
   gearOilName?: string;
   gearOilViscosity?: string;
   gearOilLitersUsed?: number;
+  gearOilUnitPrice?: number;
+  gearOilTotalPrice?: number;
   gearOilDetails?: string;
   // Notes & Financials
   technicalNotes?: string;

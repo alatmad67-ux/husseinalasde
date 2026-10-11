@@ -2,12 +2,15 @@
 
 import React, { useState, useEffect } from 'react';
 import HeaderNav from '@/components/HeaderNav';
+import IraqiPlateBadge from '@/components/IraqiPlateBadge';
+import ReceiptModal, { ReceiptData } from '@/components/ReceiptModal';
 import { 
   searchCustomerOrVehicle, 
   recordServiceVisit,
   createCustomerWithVehicle,
   addVehicleToCustomer,
-  getProductsList
+  getProductsList,
+  formatExactDateTime
 } from '@/services/firestoreService';
 import { CustomerDoc, VehicleDoc, ProductDoc } from '@/types/firestore';
 import { 
@@ -26,13 +29,15 @@ import {
   X,
   Plus,
   Settings,
-  Droplet
+  Droplet,
+  Calendar
 } from 'lucide-react';
 
 export default function WorkshopPOSPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [savingVisit, setSavingVisit] = useState(false);
+  const [liveClock, setLiveClock] = useState('');
   
   // Current Customer & All their Registered Vehicles
   const [customer, setCustomer] = useState<CustomerDoc | null>(null);
@@ -47,20 +52,24 @@ export default function WorkshopPOSPage() {
   const [nextOdo, setNextOdo] = useState<number>(0);
   const [customKmInterval, setCustomKmInterval] = useState<string>('3000');
 
-  // Engine Oil Inputs
+  // Engine Oil Inputs + Editable Price
   const [selectedOilId, setSelectedOilId] = useState<string>('');
   const [selectedOilSize, setSelectedOilSize] = useState<string>('');
   const [oilLiters, setOilLiters] = useState<number>(4.0);
+  const [oilPricePerLiter, setOilPricePerLiter] = useState<number>(3000);
+  const [oilTotalCustomPrice, setOilTotalCustomPrice] = useState<number>(12000);
 
-  // Filter Input
+  // Filter Input + Editable Price
   const [selectedFilterId, setSelectedFilterId] = useState<string>('');
   const [selectedFilterSize, setSelectedFilterSize] = useState<string>('');
+  const [filterCustomPrice, setFilterCustomPrice] = useState<number>(7500);
 
-  // Gear Oil Inputs (New!)
+  // Gear Oil Inputs + Editable Price
   const [includeGearOil, setIncludeGearOil] = useState<boolean>(false);
   const [selectedGearOilId, setSelectedGearOilId] = useState<string>('');
   const [selectedGearOilSize, setSelectedGearOilSize] = useState<string>('');
   const [gearOilLiters, setGearOilLiters] = useState<number>(4.0);
+  const [gearCustomPrice, setGearCustomPrice] = useState<number>(16000);
   const [gearOilNotes, setGearOilNotes] = useState<string>('فحص الگير: طبيعي');
 
   // Technical Notes & Financials
@@ -69,6 +78,9 @@ export default function WorkshopPOSPage() {
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Receipt Modal State
+  const [receiptModalData, setReceiptModalData] = useState<ReceiptData | null>(null);
 
   // Modals: New Customer + Car OR Add Car to Current Customer
   const [newCustomerModalOpen, setNewCustomerModalOpen] = useState(false);
@@ -79,7 +91,7 @@ export default function WorkshopPOSPage() {
     fullName: '',
     phoneNumber: '',
     makeModel: '',
-    plateNumber: '',
+    plateNumber: '14 A 12345',
     engineSize: '2.0L 4-سلندر',
     modelYear: new Date().getFullYear(),
     lastOdometer: 0,
@@ -89,13 +101,23 @@ export default function WorkshopPOSPage() {
 
   const [newCarForm, setNewCarForm] = useState({
     makeModel: '',
-    plateNumber: '',
+    plateNumber: '14 G 34567',
     engineSize: '2.0L 4-سلندر',
     modelYear: new Date().getFullYear(),
     lastOdometer: 0,
     preferredOil: '10W40',
     preferredFilter: ''
   });
+
+  // Live Clock display
+  useEffect(() => {
+    const updateClock = () => {
+      setLiveClock(new Date().toLocaleString('ar-IQ', { dateStyle: 'full', timeStyle: 'short' }));
+    };
+    updateClock();
+    const timer = setInterval(updateClock, 15000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Load products list from Firestore
   useEffect(() => {
@@ -108,16 +130,23 @@ export default function WorkshopPOSPage() {
           if (firstOil?.id) {
             setSelectedOilId(firstOil.id);
             setSelectedOilSize(firstOil.availableSizes?.[0] || firstOil.viscosity || '');
+            const pkgPrice = firstOil.serviceSalePrice || firstOil.salePrice || 12000;
+            const pkgLiters = firstOil.packageSizeLiters || 4;
+            const perL = Math.round(pkgPrice / pkgLiters);
+            setOilPricePerLiter(perL);
+            setOilTotalCustomPrice(perL * 4);
           }
           const firstFilter = list.find(p => p.category === 'filter');
           if (firstFilter?.id) {
             setSelectedFilterId(firstFilter.id);
             setSelectedFilterSize(firstFilter.availableSizes?.[0] || firstFilter.viscosity || '');
+            setFilterCustomPrice(firstFilter.serviceSalePrice || firstFilter.salePrice || 7500);
           }
           const firstGear = list.find(p => p.category === 'gear_oil');
           if (firstGear?.id) {
             setSelectedGearOilId(firstGear.id);
             setSelectedGearOilSize(firstGear.availableSizes?.[0] || firstGear.viscosity || '');
+            setGearCustomPrice(firstGear.serviceSalePrice || firstGear.salePrice || 16000);
           }
         }
       } catch (err) {
@@ -127,29 +156,62 @@ export default function WorkshopPOSPage() {
     loadProducts();
   }, []);
 
-  // Recalculate suggested price whenever oil, filter, or gear oil changes (using Service Price)
+  // Recalculate total invoice when individual editable item prices change
   useEffect(() => {
-    const oilProd = products.find(p => p.id === selectedOilId);
-    const filterProd = products.find(p => p.id === selectedFilterId);
-    const gearProd = products.find(p => p.id === selectedGearOilId);
-
-    const oilUnitService = oilProd?.serviceSalePrice || oilProd?.salePrice || 12000;
-    const oilPackageLiters = oilProd?.packageSizeLiters || 4;
-    const oilCalculated = Math.round((oilUnitService / oilPackageLiters) * oilLiters);
-
-    const filterCalculated = filterProd ? (filterProd.serviceSalePrice || filterProd.salePrice || 7000) : 0;
-
-    let gearCalculated = 0;
-    if (includeGearOil && gearProd) {
-      const gearUnitService = gearProd.serviceSalePrice || gearProd.salePrice || 15000;
-      const gearPkgLiters = gearProd.packageSizeLiters || 4;
-      gearCalculated = Math.round((gearUnitService / gearPkgLiters) * gearOilLiters);
-    }
-
-    const sum = oilCalculated + filterCalculated + gearCalculated;
+    const filterVal = selectedFilterId ? Number(filterCustomPrice || 0) : 0;
+    const gearVal = includeGearOil ? Number(gearCustomPrice || 0) : 0;
+    const sum = Number(oilTotalCustomPrice || 0) + filterVal + gearVal;
     setTotalPrice(sum);
     setPaidAmount(sum);
-  }, [selectedOilId, oilLiters, selectedFilterId, includeGearOil, selectedGearOilId, gearOilLiters, products]);
+  }, [oilTotalCustomPrice, selectedFilterId, filterCustomPrice, includeGearOil, gearCustomPrice]);
+
+  // Handlers for Oil Selection & Liters & Per-Liter Price
+  const handleSelectOilProduct = (id: string) => {
+    setSelectedOilId(id);
+    const prod = products.find(p => p.id === id);
+    if (prod) {
+      setSelectedOilSize(prod.availableSizes?.[0] || prod.viscosity || '');
+      const pkgPrice = prod.serviceSalePrice || prod.salePrice || 12000;
+      const pkgLiters = prod.packageSizeLiters || 4;
+      const perLiter = Math.round(pkgPrice / pkgLiters);
+      setOilPricePerLiter(perLiter);
+      setOilTotalCustomPrice(Math.round(perLiter * oilLiters));
+    }
+  };
+
+  const handleOilLitersChange = (liters: number) => {
+    setOilLiters(liters);
+    setOilTotalCustomPrice(Math.round(oilPricePerLiter * liters));
+  };
+
+  const handleOilPricePerLiterChange = (perLiter: number) => {
+    setOilPricePerLiter(perLiter);
+    setOilTotalCustomPrice(Math.round(perLiter * oilLiters));
+  };
+
+  const handleSelectFilterProduct = (id: string) => {
+    setSelectedFilterId(id);
+    if (!id) {
+      setFilterCustomPrice(0);
+      return;
+    }
+    const prod = products.find(p => p.id === id);
+    if (prod) {
+      setSelectedFilterSize(prod.availableSizes?.[0] || prod.viscosity || '');
+      setFilterCustomPrice(prod.serviceSalePrice || prod.salePrice || 7500);
+    }
+  };
+
+  const handleSelectGearOilProduct = (id: string) => {
+    setSelectedGearOilId(id);
+    const prod = products.find(p => p.id === id);
+    if (prod) {
+      setSelectedGearOilSize(prod.availableSizes?.[0] || prod.viscosity || '');
+      const pkgPrice = prod.serviceSalePrice || prod.salePrice || 16000;
+      const pkgLiters = prod.packageSizeLiters || 4;
+      setGearCustomPrice(Math.round((pkgPrice / pkgLiters) * gearOilLiters));
+    }
+  };
 
   // Reset to New Fresh Transaction
   const handleResetNewTransaction = () => {
@@ -168,7 +230,7 @@ export default function WorkshopPOSPage() {
     setSaveSuccessMsg(null);
   };
 
-  // Search by Phone or Plate
+  // Fast Parallel Search by Phone or Plate
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
@@ -185,7 +247,7 @@ export default function WorkshopPOSPage() {
           selectVehicleForPOS(result.vehicle);
         }
       } else {
-        setErrorMessage('لم يتم العثور على زبون أو مركبة مطابقة. يمكنك الضغط على "+ تسجيل زبون جديد" بالأسفل.');
+        setErrorMessage('لم يتم العثور على زبون أو مركبة مطابقة. اضغط على "+ تسجيل زبون جديد" لإضافته فوراً.');
       }
     } catch (err: any) {
       console.error(err);
@@ -286,7 +348,7 @@ export default function WorkshopPOSPage() {
     }
   };
 
-  // Save Service Visit
+  // Save Service Visit & Open Receipt Modal
   const handleSaveVisit = async () => {
     if (!customer?.id || !vehicle?.id) {
       setErrorMessage('يرجى البحث عن زبون أولاً أو الضغط على "+ تسجيل زبون جديد".');
@@ -312,7 +374,7 @@ export default function WorkshopPOSPage() {
         oilName: selectedOil?.name || 'زيت محرك',
         viscosity: selectedOilSize || selectedOil?.viscosity || '',
         oilLitersUsed: Number(oilLiters),
-        filterCode: selectedFilterSize || selectedFilter?.viscosity || selectedFilter?.name || '',
+        filterCode: selectedFilterId ? (selectedFilterSize || selectedFilter?.viscosity || selectedFilter?.name || '') : '',
         gearOilProductId: includeGearOil ? selectedGearOilId : undefined,
         gearOilName: includeGearOil ? selectedGear?.name : '',
         gearOilViscosity: includeGearOil ? selectedGearOilSize : '',
@@ -336,8 +398,49 @@ export default function WorkshopPOSPage() {
         nextOdometer: Number(nextOdo)
       } : null);
 
-      setSaveSuccessMsg(`تم حفظ الزيارة بنجاح! تم خصم الزيوت من المخزون وإضافة 10 نقاط ولاء للزبون.`);
-      setTimeout(() => setSaveSuccessMsg(null), 6000);
+      // Build receipt items
+      const receiptItems: { label: string; qty: string; price: number }[] = [
+        {
+          label: `${selectedOil?.name || 'زيت محرك'} (${selectedOilSize})`,
+          qty: `${oilLiters} لتر`,
+          price: Number(oilTotalCustomPrice)
+        }
+      ];
+
+      if (selectedFilterId && selectedFilter) {
+        receiptItems.push({
+          label: `${selectedFilter.name} (${selectedFilterSize})`,
+          qty: `1 قطعة`,
+          price: Number(filterCustomPrice)
+        });
+      }
+
+      if (includeGearOil && selectedGear) {
+        receiptItems.push({
+          label: `${selectedGear.name} (${selectedGearOilSize})`,
+          qty: `${gearOilLiters} لتر`,
+          price: Number(gearCustomPrice)
+        });
+      }
+
+      setReceiptModalData({
+        receiptNumber: `INV-${res.visitId.slice(-6).toUpperCase()}`,
+        dateTimeStr: formatExactDateTime(new Date().toISOString()),
+        customerName: customer.fullName,
+        customerPhone: customer.phoneNumber,
+        vehicleModel: vehicle.makeModel,
+        plateNumber: vehicle.plateNumber,
+        currentOdometer: Number(currentOdo),
+        nextOdometer: Number(nextOdo),
+        items: receiptItems,
+        totalPrice: Number(totalPrice),
+        paidAmount: Number(paidAmount),
+        debtAmount: calculatedDebt,
+        techNotes,
+        qrCodeId: vehicle.qrCodeId
+      });
+
+      setSaveSuccessMsg(`تم حفظ الزيارة بنجاح! اختر الآن طباعة الوصل أو إرساله لواتساب الزبون.`);
     } catch (err: any) {
       console.error(err);
       setErrorMessage(err.message || 'فشل حفظ الزيارة.');
@@ -355,36 +458,37 @@ export default function WorkshopPOSPage() {
     <div className="min-h-screen flex flex-col bg-slate-50">
       <HeaderNav />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 space-y-5">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 space-y-6 print:hidden">
         
-        {/* Top Control Bar: Search OR New Customer */}
-        <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm space-y-4">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-100 pb-3">
+        {/* Top Control Bar: Search OR New Customer + Live Date/Time */}
+        <section className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-sm space-y-4">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 border-b-2 border-slate-100 pb-4">
             <div>
-              <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
-                <Car className="w-5 h-5 text-amber-600" />
+              <h2 className="text-xl sm:text-2xl font-black text-slate-950 flex items-center gap-2.5">
+                <Car className="w-7 h-7 text-amber-600" />
                 <span>كاونتر تبديل الزيت والخدمة السريعة</span>
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5 font-medium">
-                ابحث برقم هاتف الزبون أو رقم اللوحة، أو سجل زبوناً جديداً مع مركبته.
+              <p className="text-sm text-slate-600 mt-1 font-bold flex items-center gap-1.5">
+                <Calendar className="w-4 h-4 text-amber-600" />
+                <span>تاريخ ووقت العملية: {liveClock}</span>
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
               <button
                 onClick={() => setNewCustomerModalOpen(true)}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl text-xs font-black transition shadow-sm"
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-2xl text-sm font-black transition shadow-md shadow-amber-500/20"
               >
-                <UserPlus className="w-4 h-4" />
+                <UserPlus className="w-5 h-5" />
                 <span>+ تسجيل زبون جديد</span>
               </button>
 
               {customer && (
                 <button
                   onClick={() => setAddCarModalOpen(true)}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2.5 rounded-xl text-xs font-bold transition shadow-sm"
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-2xl text-sm font-black transition shadow-md"
                 >
-                  <Plus className="w-4 h-4" />
+                  <Plus className="w-5 h-5" />
                   <span>+ إضافة سيارة أخرى للزبون</span>
                 </button>
               )}
@@ -392,50 +496,50 @@ export default function WorkshopPOSPage() {
               <button
                 onClick={handleResetNewTransaction}
                 title="إفراغ الكاونتر وبدء معاملة جديدة"
-                className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2.5 rounded-xl text-xs font-bold border border-slate-200 transition"
+                className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 px-4 py-3 rounded-2xl text-sm font-black border border-slate-300 transition"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
+                <RefreshCw className="w-4 h-4" />
                 <span>تصفير</span>
               </button>
             </div>
           </div>
 
           {/* Search Form */}
-          <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2.5 items-center">
+          <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-3 items-center">
             <div className="relative flex-1 w-full">
-              <Search className="absolute right-3.5 top-3.5 w-5 h-5 text-slate-400" />
+              <Search className="absolute right-4 top-4 w-5 h-5 text-slate-400" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="ابحث برقم هاتف الزبون (مثال: 0780...) أو رقم اللوحة أو الاسم..."
-                className="w-full bg-slate-50 border border-slate-300 rounded-xl pr-11 pl-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white font-mono text-sm font-bold"
+                placeholder="ابحث فوراً برقم هاتف الزبون (0780...) أو رقم اللوحة أو الاسم..."
+                className="w-full bg-slate-50 border-2 border-slate-300 rounded-2xl pr-12 pl-4 py-3.5 text-slate-950 placeholder-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white font-mono text-base font-black"
               />
             </div>
             <button
               type="submit"
               disabled={loadingSearch}
-              className="w-full sm:w-auto px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition text-sm"
+              className="w-full sm:w-auto px-8 py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-2xl flex items-center justify-center gap-2 transition text-base shadow-sm"
             >
-              {loadingSearch ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-              <span>بحث عن الزبون</span>
+              {loadingSearch ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
+              <span>بحث سريع</span>
             </button>
           </form>
 
-          {/* Customer Profile & Multi-Vehicle Selector */}
+          {/* Customer Profile & Iraqi License Plate Display */}
           {customer ? (
-            <div className="pt-2 space-y-3">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <span className="text-[11px] text-slate-500 block font-semibold">اسم الزبون</span>
-                  <span className="font-black text-slate-900 text-sm">{customer.fullName}</span>
-                  <span className="text-xs text-slate-500 block font-mono mt-0.5">{customer.phoneNumber}</span>
-                </div>
+            <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-slate-50 p-4 rounded-2xl border-2 border-slate-200 flex flex-col justify-center">
+                <span className="text-xs text-slate-500 font-bold">اسم الزبون ورقم الهاتف</span>
+                <span className="font-black text-slate-950 text-lg mt-0.5">{customer.fullName}</span>
+                <span className="text-sm text-slate-700 font-mono font-black mt-0.5">{customer.phoneNumber}</span>
+              </div>
 
-                {/* Vehicle Switcher if customer owns multiple cars */}
-                <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200">
-                  <span className="text-[11px] text-amber-800 block font-bold mb-1">
-                    اختر سيارة الزبون ({customerVehicles.length} مسجلة):
+              {/* Vehicle Switcher + Iraqi Plate */}
+              <div className="bg-amber-50/70 p-4 rounded-2xl border-2 border-amber-300 sm:col-span-2 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="space-y-1 w-full sm:w-auto">
+                  <span className="text-xs text-amber-900 block font-black">
+                    السيارة المختارة ({customerVehicles.length} مسجلة):
                   </span>
                   {customerVehicles.length > 1 ? (
                     <select
@@ -444,41 +548,40 @@ export default function WorkshopPOSPage() {
                         const found = customerVehicles.find(v => v.id === e.target.value);
                         if (found) selectVehicleForPOS(found);
                       }}
-                      className="w-full bg-white border border-amber-300 rounded-lg px-2 py-1 text-xs font-black text-slate-900 focus:outline-none"
+                      className="w-full bg-white border-2 border-amber-400 rounded-xl px-3 py-2 text-sm font-black text-slate-950 focus:outline-none"
                     >
                       {customerVehicles.map((v) => (
                         <option key={v.id} value={v.id}>
-                          {v.makeModel} - ({v.plateNumber})
+                          {v.makeModel} ({v.plateNumber})
                         </option>
                       ))}
                     </select>
                   ) : (
-                    <div>
-                      <span className="font-black text-amber-700 text-sm block">{vehicle?.makeModel || 'غير محدد'}</span>
-                      <span className="text-[11px] text-slate-600 font-mono">{vehicle?.plateNumber}</span>
-                    </div>
+                    <span className="font-black text-slate-950 text-lg block">{vehicle?.makeModel || 'غير محدد'}</span>
                   )}
                 </div>
 
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <span className="text-[11px] text-slate-500 block font-semibold">نقاط الولاء</span>
-                  <span className="font-black text-emerald-600 flex items-center gap-1 text-sm mt-1">
-                    <Sparkles className="w-4 h-4" /> {customer.loyaltyPoints} نقطة
-                  </span>
-                </div>
+                {vehicle?.plateNumber && (
+                  <IraqiPlateBadge plateNumber={vehicle.plateNumber} size="md" />
+                )}
+              </div>
 
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <span className="text-[11px] text-slate-500 block font-semibold">الديون السابقة</span>
-                  <span className={`font-black text-sm block mt-1 ${customer.totalDebt > 0 ? 'text-red-600' : 'text-slate-700'}`}>
+              <div className="bg-slate-50 p-4 rounded-2xl border-2 border-slate-200 flex flex-col justify-between">
+                <div>
+                  <span className="text-xs text-slate-500 block font-bold">الديون المسجلة على الزبون</span>
+                  <span className={`font-black text-lg font-mono block mt-0.5 ${customer.totalDebt > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
                     {customer.totalDebt.toLocaleString()} د.ع
                   </span>
+                </div>
+                <div className="text-xs font-black text-emerald-700 flex items-center gap-1 mt-2">
+                  <Sparkles className="w-4 h-4" /> نقاط الولاء: {customer.loyaltyPoints}
                 </div>
               </div>
             </div>
           ) : (
-            <div className="p-3.5 bg-slate-50 rounded-xl border border-dashed border-slate-300 text-center">
-              <p className="text-xs text-slate-600 font-medium">
-                الكاونتر جاهز لمعاملة جديدة — ابحث عن زبون حالي أو اضغط على <strong>"+ تسجيل زبون جديد"</strong>.
+            <div className="p-4 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-300 text-center">
+              <p className="text-sm text-slate-700 font-black">
+                الكاونتر جاهز لمعاملة جديدة — ابحث عن زبون حالي أو اضغط على <span className="text-amber-600">"+ تسجيل زبون جديد"</span>.
               </p>
             </div>
           )}
@@ -486,16 +589,16 @@ export default function WorkshopPOSPage() {
 
         {/* Alerts */}
         {errorMessage && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-center gap-3">
-            <AlertTriangle className="w-5 h-5 flex-shrink-0 text-red-600" />
-            <p className="font-bold text-sm">{errorMessage}</p>
+          <div className="bg-red-50 border-2 border-red-200 text-red-800 p-4 rounded-2xl flex items-center gap-3">
+            <AlertTriangle className="w-6 h-6 flex-shrink-0 text-red-600" />
+            <p className="font-black text-base">{errorMessage}</p>
           </div>
         )}
 
         {saveSuccessMsg && (
-          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-xl flex items-center gap-3">
-            <CheckCircle className="w-5 h-5 flex-shrink-0 text-emerald-600" />
-            <p className="font-bold text-sm">{saveSuccessMsg}</p>
+          <div className="bg-emerald-50 border-2 border-emerald-200 text-emerald-900 p-4 rounded-2xl flex items-center gap-3">
+            <CheckCircle className="w-6 h-6 flex-shrink-0 text-emerald-600" />
+            <p className="font-black text-base">{saveSuccessMsg}</p>
           </div>
         )}
 
@@ -503,208 +606,201 @@ export default function WorkshopPOSPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
           {/* Left Column (2 spans): Odometer + Engine Oil + Gear Oil + Notes */}
-          <div className="lg:col-span-2 space-y-5">
+          <div className="lg:col-span-2 space-y-6">
             
-            {/* 1. Odometer & Distance Section (3000km default + manual input) */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex items-center gap-2 text-slate-900 font-black text-base border-b border-slate-100 pb-2.5">
-                <Gauge className="w-5 h-5 text-amber-600" />
+            {/* 1. Odometer & Distance Section (+3000km default + manual input) */}
+            <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+              <div className="flex items-center gap-2 text-slate-950 font-black text-lg border-b-2 border-slate-100 pb-3">
+                <Gauge className="w-6 h-6 text-amber-600" />
                 <h2>العداد والمسافة المقطوعة (Odometer)</h2>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  <label className="block text-sm font-black text-slate-800 mb-1.5">
                     العداد الحالي (كم)
                   </label>
                   <input
                     type="number"
                     value={currentOdo}
                     onChange={(e) => handleCurrentOdoChange(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 font-mono text-lg font-black text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-2xl px-4 py-3 font-mono text-xl font-black text-slate-950 focus:outline-none focus:border-amber-500 focus:bg-white"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-amber-700 mb-1.5">
+                  <label className="block text-sm font-black text-amber-800 mb-1.5">
                     المسافة المضافة يدوياً (كم)
                   </label>
                   <input
                     type="number"
                     value={customKmInterval}
                     onChange={(e) => handleManualKmChange(e.target.value)}
-                    placeholder="اكتب المسافة مثل 3000 أو 4500"
-                    className="w-full bg-amber-50/50 border border-amber-300 rounded-xl px-3.5 py-2.5 font-mono text-lg font-black text-amber-800 focus:outline-none focus:border-amber-500 focus:bg-white"
+                    placeholder="مثال: 3000 أو 4000"
+                    className="w-full bg-amber-50 border-2 border-amber-300 rounded-2xl px-4 py-3 font-mono text-xl font-black text-amber-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-emerald-700 mb-1.5">
+                  <label className="block text-sm font-black text-emerald-800 mb-1.5">
                     العداد القادم للاستحقاق (كم)
                   </label>
                   <input
                     type="number"
                     value={nextOdo}
                     onChange={(e) => setNextOdo(Number(e.target.value))}
-                    className="w-full bg-emerald-50/60 border border-emerald-300 rounded-xl px-3.5 py-2.5 font-mono text-lg font-black text-emerald-800 focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-emerald-50 border-2 border-emerald-300 rounded-2xl px-4 py-3 font-mono text-xl font-black text-emerald-900 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
               </div>
 
               {/* Quick Distance Shortcut Buttons (3000, 5000, 10000) */}
-              <div className="flex flex-wrap gap-2 pt-1 items-center">
-                <span className="text-xs font-bold text-slate-500">اختصارات سريعة للمسافة:</span>
-                <button
-                  type="button"
-                  onClick={() => handleOdoShortcut(3000)}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black border transition ${
-                    customKmInterval === '3000'
-                      ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-                  }`}
-                >
-                  +3,000 كم
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleOdoShortcut(5000)}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black border transition ${
-                    customKmInterval === '5000'
-                      ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-                  }`}
-                >
-                  +5,000 كم
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleOdoShortcut(10000)}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black border transition ${
-                    customKmInterval === '10000'
-                      ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-                  }`}
-                >
-                  +10,000 كم
-                </button>
+              <div className="flex flex-wrap gap-2.5 pt-2 items-center">
+                <span className="text-sm font-black text-slate-600">اختصارات سريعة:</span>
+                {[3000, 5000, 10000].map((km) => (
+                  <button
+                    key={km}
+                    type="button"
+                    onClick={() => handleOdoShortcut(km)}
+                    className={`px-4 py-2 rounded-xl text-sm font-black border-2 transition ${
+                      customKmInterval === String(km)
+                        ? 'bg-amber-500 text-white border-amber-600 shadow-sm'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
+                    }`}
+                  >
+                    +{km.toLocaleString()} كم
+                  </button>
+                ))}
               </div>
             </div>
 
-            {/* 2. Engine Oil & Filter Selection (With Size/Viscosity dropdown) */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex items-center gap-2 text-slate-900 font-black text-base border-b border-slate-100 pb-2.5">
-                <Droplet className="w-5 h-5 text-amber-600" />
-                <h2>زيت المحرك والفلتر</h2>
+            {/* 2. Engine Oil & Filter Selection (With Editable Item Prices!) */}
+            <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-5">
+              <div className="flex items-center gap-2 text-slate-950 font-black text-lg border-b-2 border-slate-100 pb-3">
+                <Droplet className="w-6 h-6 text-amber-600" />
+                <h2>زيت المحرك والفلتر (مع إمكانية تعديل الأسعار مباشرة)</h2>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-                {/* Oil Product */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    نوع / ماركة زيت المحرك
-                  </label>
-                  <select
-                    value={selectedOilId}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      setSelectedOilId(id);
-                      const prod = products.find(p => p.id === id);
-                      if (prod) {
-                        setSelectedOilSize(prod.availableSizes?.[0] || prod.viscosity || '');
-                      }
-                    }}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-900 font-bold text-xs focus:outline-none focus:border-amber-500"
-                  >
-                    {products.filter(p => p.category === 'engine_oil').map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} (متاح: {p.totalLitersStock} لتر)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Oil Viscosity / Size selector */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    درجة اللزوجة / السايز
-                  </label>
-                  {selectedOil?.availableSizes && selectedOil.availableSizes.length > 0 ? (
+              {/* Engine Oil Row */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-black text-slate-800 mb-1">
+                      نوع / ماركة زيت المحرك
+                    </label>
                     <select
-                      value={selectedOilSize}
-                      onChange={(e) => setSelectedOilSize(e.target.value)}
-                      className="w-full bg-amber-50 border border-amber-300 rounded-xl px-3 py-2.5 text-amber-900 font-mono font-black text-xs focus:outline-none"
+                      value={selectedOilId}
+                      onChange={(e) => handleSelectOilProduct(e.target.value)}
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-3 text-slate-950 font-black text-sm focus:outline-none focus:border-amber-500"
                     >
-                      {selectedOil.availableSizes.map((sz) => (
-                        <option key={sz} value={sz}>{sz}</option>
+                      {products.filter(p => p.category === 'engine_oil').map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} (المتاح: {p.totalLitersStock} لتر)
+                        </option>
                       ))}
                     </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={selectedOilSize}
-                      onChange={(e) => setSelectedOilSize(e.target.value)}
-                      placeholder="مثال: 10W40 أو 5W30"
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-900 font-mono font-bold text-xs"
-                    />
-                  )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-black text-slate-800 mb-1">
+                      درجة اللزوجة / السايز
+                    </label>
+                    {selectedOil?.availableSizes && selectedOil.availableSizes.length > 0 ? (
+                      <select
+                        value={selectedOilSize}
+                        onChange={(e) => setSelectedOilSize(e.target.value)}
+                        className="w-full bg-amber-50 border-2 border-amber-400 rounded-xl px-3.5 py-3 text-amber-950 font-mono font-black text-sm focus:outline-none"
+                      >
+                        {selectedOil.availableSizes.map((sz) => (
+                          <option key={sz} value={sz}>{sz}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={selectedOilSize}
+                        onChange={(e) => setSelectedOilSize(e.target.value)}
+                        placeholder="10W40 / 5W30"
+                        className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-3 text-slate-950 font-mono font-black text-sm"
+                      />
+                    )}
+                  </div>
                 </div>
 
-                {/* Liters Used */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    الكمية باللتر
-                  </label>
-                  <div className="relative">
+                {/* Liters + Price per Liter + Total Oil Price (Editable) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pt-2">
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 mb-1">
+                      الكمية المستهلكة (باللتر)
+                    </label>
                     <input
                       type="number"
                       step="0.1"
                       min="0.5"
                       max="25"
                       value={oilLiters}
-                      onChange={(e) => setOilLiters(Number(e.target.value))}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 font-mono text-base font-black text-slate-900 focus:outline-none focus:border-amber-500"
+                      onChange={(e) => handleOilLitersChange(Number(e.target.value))}
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-2.5 font-mono text-base font-black text-slate-950 focus:outline-none focus:border-amber-500"
                     />
-                    <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">لتر</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-blue-800 mb-1">
+                      سعر اللتر الواحد (قابل للتعديل)
+                    </label>
+                    <input
+                      type="number"
+                      step="250"
+                      value={oilPricePerLiter}
+                      onChange={(e) => handleOilPricePerLiterChange(Number(e.target.value))}
+                      className="w-full bg-blue-50 border-2 border-blue-300 rounded-xl px-3.5 py-2.5 font-mono text-base font-black text-blue-900 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-amber-800 mb-1">
+                      إجمالي سعر الزيت (قابل للتعديل)
+                    </label>
+                    <input
+                      type="number"
+                      step="500"
+                      value={oilTotalCustomPrice}
+                      onChange={(e) => setOilTotalCustomPrice(Number(e.target.value))}
+                      className="w-full bg-amber-50 border-2 border-amber-400 rounded-xl px-3.5 py-2.5 font-mono text-base font-black text-amber-950 focus:outline-none"
+                    />
                   </div>
                 </div>
               </div>
 
-              {/* Filter Selection */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2 border-t border-slate-100">
+              {/* Filter Selection + Editable Filter Price */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    فلتر الزيت
+                  <label className="block text-sm font-black text-slate-800 mb-1">
+                    فلتر الزيت (بالقطعة)
                   </label>
                   <select
                     value={selectedFilterId}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      setSelectedFilterId(id);
-                      const prod = products.find(p => p.id === id);
-                      if (prod) {
-                        setSelectedFilterSize(prod.availableSizes?.[0] || prod.viscosity || '');
-                      }
-                    }}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-900 font-bold text-xs focus:outline-none focus:border-amber-500"
+                    onChange={(e) => handleSelectFilterProduct(e.target.value)}
+                    className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2.5 text-slate-950 font-black text-sm"
                   >
                     <option value="">— بدون تبديل فلتر —</option>
                     {products.filter(p => p.category === 'filter').map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name} (المتوفر: {p.totalLitersStock} قطعة)
+                        {p.name} (متاح: {p.totalLitersStock} قطعة)
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    كود / رقم الفلتر
+                  <label className="block text-sm font-black text-slate-800 mb-1">
+                    رقم / كود الفلتر
                   </label>
                   {selectedFilter?.availableSizes && selectedFilter.availableSizes.length > 0 ? (
                     <select
                       value={selectedFilterSize}
                       onChange={(e) => setSelectedFilterSize(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-900 font-mono font-bold text-xs"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2.5 text-slate-950 font-mono font-black text-sm"
                     >
                       {selectedFilter.availableSizes.map((sz) => (
                         <option key={sz} value={sz}>{sz}</option>
@@ -716,67 +812,74 @@ export default function WorkshopPOSPage() {
                       value={selectedFilterSize}
                       onChange={(e) => setSelectedFilterSize(e.target.value)}
                       placeholder="كود الفلتر..."
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-slate-900 font-mono text-xs"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2.5 text-slate-950 font-mono font-black text-sm"
                     />
                   )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-black text-amber-800 mb-1">
+                    سعر الفلتر (قابل للتعديل)
+                  </label>
+                  <input
+                    type="number"
+                    step="500"
+                    disabled={!selectedFilterId}
+                    value={selectedFilterId ? filterCustomPrice : 0}
+                    onChange={(e) => setFilterCustomPrice(Number(e.target.value))}
+                    className="w-full bg-amber-50 border-2 border-amber-400 disabled:opacity-50 rounded-xl px-3.5 py-2.5 font-mono text-base font-black text-amber-950"
+                  />
                 </div>
               </div>
             </div>
 
             {/* 3. Gear Oil Selection (اختيار دهن الجير / القير) */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-                <div className="flex items-center gap-2 text-slate-900 font-black text-base">
-                  <Settings className="w-5 h-5 text-amber-600" />
+            <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between border-b-2 border-slate-100 pb-3">
+                <div className="flex items-center gap-2 text-slate-950 font-black text-lg">
+                  <Settings className="w-6 h-6 text-amber-600" />
                   <h2>دهن الجير (القير) والملاحظات الفنية</h2>
                 </div>
 
-                <label className="flex items-center gap-2 cursor-pointer bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-200">
+                <label className="flex items-center gap-2 cursor-pointer bg-amber-50 px-4 py-2 rounded-xl border-2 border-amber-300">
                   <input
                     type="checkbox"
                     checked={includeGearOil}
                     onChange={(e) => setIncludeGearOil(e.target.checked)}
-                    className="w-4 h-4 accent-amber-600 rounded"
+                    className="w-5 h-5 accent-amber-600 rounded"
                   />
-                  <span className="text-xs font-black text-amber-900">تبديل أو إضافة دهن جير؟</span>
+                  <span className="text-sm font-black text-amber-950">إضافة / تبديل دهن جير</span>
                 </label>
               </div>
 
               {includeGearOil && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 bg-amber-50/40 p-3.5 rounded-xl border border-amber-200">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3.5 bg-amber-50/50 p-4 rounded-2xl border-2 border-amber-200">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-black text-slate-800 mb-1">
                       نوع دهن الجير
                     </label>
                     <select
                       value={selectedGearOilId}
-                      onChange={(e) => {
-                        const id = e.target.value;
-                        setSelectedGearOilId(id);
-                        const prod = products.find(p => p.id === id);
-                        if (prod) {
-                          setSelectedGearOilSize(prod.availableSizes?.[0] || prod.viscosity || '');
-                        }
-                      }}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-bold text-xs"
+                      onChange={(e) => handleSelectGearOilProduct(e.target.value)}
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2.5 text-slate-950 font-black text-xs"
                     >
                       {products.filter(p => p.category === 'gear_oil').map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name} (المتاح: {p.totalLitersStock} لتر)
+                          {p.name} ({p.totalLitersStock} لتر)
                         </option>
                       ))}
                     </select>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      عيار / سايز دهن الجير
+                    <label className="block text-xs font-black text-slate-800 mb-1">
+                      عيار / سايز الجير
                     </label>
                     {selectedGear?.availableSizes && selectedGear.availableSizes.length > 0 ? (
                       <select
                         value={selectedGearOilSize}
                         onChange={(e) => setSelectedGearOilSize(e.target.value)}
-                        className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-amber-900 font-mono font-bold text-xs"
+                        className="w-full bg-white border-2 border-amber-300 rounded-xl px-3 py-2.5 text-amber-950 font-mono font-black text-xs"
                       >
                         {selectedGear.availableSizes.map((sz) => (
                           <option key={sz} value={sz}>{sz}</option>
@@ -787,15 +890,14 @@ export default function WorkshopPOSPage() {
                         type="text"
                         value={selectedGearOilSize}
                         onChange={(e) => setSelectedGearOilSize(e.target.value)}
-                        placeholder="ATF / CVT / 75W90"
-                        className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono text-xs"
+                        className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2.5 text-slate-950 font-mono text-xs"
                       />
                     )}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      الكمية باللتر
+                    <label className="block text-xs font-black text-slate-800 mb-1">
+                      الكمية (باللتر)
                     </label>
                     <input
                       type="number"
@@ -803,15 +905,28 @@ export default function WorkshopPOSPage() {
                       min="0.5"
                       value={gearOilLiters}
                       onChange={(e) => setGearOilLiters(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 font-mono font-black text-sm text-slate-900"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2.5 font-mono font-black text-sm text-slate-950"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-amber-900 mb-1">
+                      سعر دهن الجير (قابل للتعديل)
+                    </label>
+                    <input
+                      type="number"
+                      step="500"
+                      value={gearCustomPrice}
+                      onChange={(e) => setGearCustomPrice(Number(e.target.value))}
+                      className="w-full bg-white border-2 border-amber-400 rounded-xl px-3 py-2.5 font-mono font-black text-sm text-amber-950"
                     />
                   </div>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label className="block text-sm font-black text-slate-800 mb-1">
                     ملاحظات فحص الجير
                   </label>
                   <input
@@ -819,12 +934,12 @@ export default function WorkshopPOSPage() {
                     value={gearOilNotes}
                     onChange={(e) => setGearOilNotes(e.target.value)}
                     placeholder="مستوى أو حالة دهن الجير..."
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-900 text-xs font-medium focus:bg-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-4 py-3 text-slate-950 text-sm font-bold focus:bg-white focus:outline-none focus:border-amber-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label className="block text-sm font-black text-slate-800 mb-1">
                     ملاحظات الفني العامّة (تبخير، تهريب، ماء راديتر)
                   </label>
                   <input
@@ -832,7 +947,7 @@ export default function WorkshopPOSPage() {
                     value={techNotes}
                     onChange={(e) => setTechNotes(e.target.value)}
                     placeholder="سجل أي ملاحظات ميكانيكية لتوثيقها..."
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-900 text-xs font-medium focus:bg-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-4 py-3 text-slate-950 text-sm font-bold focus:bg-white focus:outline-none focus:border-amber-500"
                   />
                 </div>
               </div>
@@ -841,91 +956,91 @@ export default function WorkshopPOSPage() {
           </div>
 
           {/* Right Column: Checkout & Summary */}
-          <div className="space-y-5">
+          <div className="space-y-6">
             
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
-              <div className="flex items-center gap-2 text-emerald-700 font-black text-base border-b border-slate-100 pb-2.5">
-                <DollarSign className="w-5 h-5" />
-                <h2>خلاصة الحساب والدفع (سعر الخدمة والتبديل)</h2>
+            <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-5">
+              <div className="flex items-center gap-2 text-emerald-700 font-black text-lg border-b-2 border-slate-100 pb-3">
+                <DollarSign className="w-6 h-6" />
+                <h2>خلاصة الفاتورة والدفع</h2>
               </div>
 
-              <div className="space-y-2.5 text-xs">
-                <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
-                  <span className="text-slate-600 font-medium">
+              <div className="space-y-3 text-sm font-bold">
+                <div className="flex justify-between items-center py-2 border-b border-slate-200">
+                  <span className="text-slate-700">
                     زيت المحرك ({selectedOilSize || '—'} × {oilLiters} لتر):
                   </span>
-                  <span className="font-mono font-bold text-slate-900">
-                    {Math.round(((selectedOil?.serviceSalePrice || selectedOil?.salePrice || 12000) / (selectedOil?.packageSizeLiters || 4)) * oilLiters).toLocaleString()} د.ع
+                  <span className="font-mono font-black text-base text-slate-950">
+                    {Number(oilTotalCustomPrice).toLocaleString()} د.ع
                   </span>
                 </div>
 
-                {selectedFilter && (
-                  <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
-                    <span className="text-slate-600 font-medium">فلتر الزيت ({selectedFilterSize}):</span>
-                    <span className="font-mono font-bold text-slate-900">
-                      {(selectedFilter.serviceSalePrice || selectedFilter.salePrice || 7000).toLocaleString()} د.ع
+                {selectedFilterId && (
+                  <div className="flex justify-between items-center py-2 border-b border-slate-200">
+                    <span className="text-slate-700">فلتر الزيت ({selectedFilterSize}):</span>
+                    <span className="font-mono font-black text-base text-slate-950">
+                      {Number(filterCustomPrice).toLocaleString()} د.ع
                     </span>
                   </div>
                 )}
 
-                {includeGearOil && selectedGear && (
-                  <div className="flex justify-between items-center py-1.5 border-b border-slate-100 text-amber-800">
-                    <span className="font-bold">دهن الجير ({selectedGearOilSize} × {gearOilLiters} لتر):</span>
-                    <span className="font-mono font-bold">
-                      {Math.round(((selectedGear.serviceSalePrice || selectedGear.salePrice || 15000) / (selectedGear.packageSizeLiters || 4)) * gearOilLiters).toLocaleString()} د.ع
+                {includeGearOil && (
+                  <div className="flex justify-between items-center py-2 border-b border-slate-200 text-amber-900">
+                    <span>دهن الجير ({selectedGearOilSize} × {gearOilLiters} لتر):</span>
+                    <span className="font-mono font-black text-base">
+                      {Number(gearCustomPrice).toLocaleString()} د.ع
                     </span>
                   </div>
                 )}
 
                 <div className="pt-2">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label className="block text-sm font-black text-slate-800 mb-1.5">
                     المبلغ الإجمالي النهائي (د.ع)
                   </label>
                   <input
                     type="number"
                     value={totalPrice}
                     onChange={(e) => setTotalPrice(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 font-mono text-xl font-black text-slate-900 focus:outline-none focus:border-amber-500"
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-2xl px-4 py-3 font-mono text-2xl font-black text-slate-950 focus:outline-none focus:border-amber-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-emerald-700 mb-1">
+                  <label className="block text-sm font-black text-emerald-800 mb-1.5">
                     المبلغ الواصل (المقبوض نقداً)
                   </label>
                   <input
                     type="number"
                     value={paidAmount}
                     onChange={(e) => setPaidAmount(Number(e.target.value))}
-                    className="w-full bg-emerald-50/50 border border-emerald-300 rounded-xl px-4 py-2.5 font-mono text-xl font-black text-emerald-700 focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-emerald-50 border-2 border-emerald-400 rounded-2xl px-4 py-3 font-mono text-2xl font-black text-emerald-800 focus:outline-none"
                   />
                 </div>
 
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-600">الباقي (يُسجل ديناً):</span>
-                  <span className={`font-mono font-black text-sm ${debt > 0 ? 'text-red-600' : 'text-slate-500'}`}>
+                <div className="p-3.5 bg-slate-100 rounded-2xl border-2 border-slate-200 flex items-center justify-between">
+                  <span className="text-sm font-black text-slate-700">الباقي (يُسجل ديناً):</span>
+                  <span className={`font-mono font-black text-lg ${debt > 0 ? 'text-red-600' : 'text-slate-600'}`}>
                     {debt.toLocaleString()} د.ع
                   </span>
                 </div>
               </div>
 
               {/* Submit Buttons */}
-              <div className="pt-2 space-y-2.5">
+              <div className="pt-2 space-y-3">
                 <button
                   type="button"
                   disabled={savingVisit || !customer}
                   onClick={handleSaveVisit}
-                  className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-black rounded-xl flex items-center justify-center gap-2 transition shadow-md shadow-amber-500/20 text-sm"
+                  className="w-full py-4 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-black rounded-2xl flex items-center justify-center gap-2 transition shadow-lg shadow-amber-500/25 text-base"
                 >
-                  {savingVisit ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
-                  <span>تثبيت الزيارة وحفظ الفاتورة</span>
+                  {savingVisit ? <Loader2 className="w-6 h-6 animate-spin" /> : <Save className="w-6 h-6" />}
+                  <span>حفظ الزيارة وإصدار الوصل</span>
                 </button>
 
                 {vehicle?.qrCodeId && (
                   <button
                     type="button"
                     onClick={() => window.open(`/public/vehicle/${vehicle.qrCodeId}`, '_blank')}
-                    className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl flex items-center justify-center gap-2 transition text-xs border border-slate-200"
+                    className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black rounded-2xl flex items-center justify-center gap-2 transition text-sm border-2 border-slate-300"
                   >
                     <FileText className="w-4 h-4 text-amber-600" />
                     <span>فتح وطباعة ملصق الزجاج (QR Sticker)</span>
@@ -940,120 +1055,132 @@ export default function WorkshopPOSPage() {
 
       </main>
 
+      {/* Thermal & WhatsApp Receipt Modal */}
+      <ReceiptModal
+        data={receiptModalData}
+        onClose={() => setReceiptModalData(null)}
+      />
+
       {/* Modal 1: Register New Customer + First Car */}
       {newCustomerModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white border border-slate-200 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
-                <UserPlus className="w-5 h-5 text-amber-600" />
+          <div className="bg-white border-2 border-slate-300 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b-2 border-slate-100 pb-3">
+              <h2 className="text-lg font-black text-slate-950 flex items-center gap-2">
+                <UserPlus className="w-6 h-6 text-amber-600" />
                 <span>تسجيل زبون جديد مع مركبته</span>
               </h2>
-              <button onClick={() => setNewCustomerModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-700">
-                <X className="w-5 h-5" />
+              <button onClick={() => setNewCustomerModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-800">
+                <X className="w-6 h-6" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateCustomerSubmit} className="space-y-3.5 text-xs">
-              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-3">
-                <span className="font-black text-amber-700 block">بيانات الزبون:</span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <form onSubmit={handleCreateCustomerSubmit} className="space-y-4 text-sm">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <span className="font-black text-amber-800 block">بيانات الزبون:</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-700 mb-1 font-bold">اسم الزبون</label>
+                    <label className="block text-slate-800 mb-1 font-black">اسم الزبون</label>
                     <input
                       type="text"
                       required
                       placeholder="مثال: حيدر علي الاسدي"
                       value={newCustForm.fullName}
                       onChange={(e) => setNewCustForm({ ...newCustForm, fullName: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-bold"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-black"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-700 mb-1 font-bold">رقم الهاتف</label>
+                    <label className="block text-slate-800 mb-1 font-black">رقم الهاتف</label>
                     <input
                       type="text"
                       required
                       placeholder="0780xxxxxxx"
                       value={newCustForm.phoneNumber}
                       onChange={(e) => setNewCustForm({ ...newCustForm, phoneNumber: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono font-bold"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-mono font-black"
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-3">
-                <span className="font-black text-amber-700 block">بيانات السيارة:</span>
-                <div className="grid grid-cols-2 gap-2.5">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <span className="font-black text-amber-800 block">بيانات السيارة واللوحة العراقية:</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-700 mb-1 font-bold">نوع وموديل السيارة</label>
+                    <label className="block text-slate-800 mb-1 font-black">نوع وموديل السيارة</label>
                     <input
                       type="text"
                       required
                       placeholder="توسان / النترا / كامري"
                       value={newCustForm.makeModel}
                       onChange={(e) => setNewCustForm({ ...newCustForm, makeModel: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-bold"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-black"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-700 mb-1 font-bold">رقم اللوحة</label>
+                    <label className="block text-slate-800 mb-1 font-black">رقم اللوحة (مثال: 14 G 34567)</label>
                     <input
                       type="text"
                       required
-                      placeholder="بغداد 12345"
+                      dir="ltr"
+                      placeholder="14 G 34567"
                       value={newCustForm.plateNumber}
                       onChange={(e) => setNewCustForm({ ...newCustForm, plateNumber: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono font-bold"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-mono font-black text-center"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2">
+                {/* Live Plate Preview */}
+                <div className="flex justify-center py-1">
+                  <IraqiPlateBadge plateNumber={newCustForm.plateNumber} size="md" />
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
                   <div>
-                    <label className="block text-slate-700 mb-1 font-bold">سنة الصنع</label>
+                    <label className="block text-slate-800 mb-1 font-black text-xs">سنة الصنع</label>
                     <input
                       type="number"
                       value={newCustForm.modelYear}
                       onChange={(e) => setNewCustForm({ ...newCustForm, modelYear: Number(e.target.value) })}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-700 mb-1 font-bold">حجم المحرك</label>
+                    <label className="block text-slate-800 mb-1 font-black text-xs">حجم المحرك</label>
                     <input
                       type="text"
                       value={newCustForm.engineSize}
                       onChange={(e) => setNewCustForm({ ...newCustForm, engineSize: e.target.value })}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-700 mb-1 font-bold">العداد الحالي</label>
+                    <label className="block text-slate-800 mb-1 font-black text-xs">العداد الحالي</label>
                     <input
                       type="number"
                       value={newCustForm.lastOdometer}
                       onChange={(e) => setNewCustForm({ ...newCustForm, lastOdometer: Number(e.target.value) })}
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono"
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="pt-2 flex gap-2">
+              <div className="pt-2 flex gap-2.5">
                 <button
                   type="submit"
                   disabled={creatingCustomer}
-                  className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl flex items-center justify-center gap-2"
+                  className="flex-1 py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl flex items-center justify-center gap-2 text-base"
                 >
-                  {creatingCustomer ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {creatingCustomer ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
                   <span>حفظ الزبون والسيارة</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setNewCustomerModalOpen(false)}
-                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+                  className="px-5 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black rounded-xl"
                 >
                   إلغاء
                 </button>
@@ -1066,59 +1193,64 @@ export default function WorkshopPOSPage() {
       {/* Modal 2: Add Additional Vehicle to Existing Customer */}
       {addCarModalOpen && customer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white border border-slate-200 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
+          <div className="bg-white border-2 border-slate-300 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center border-b-2 border-slate-100 pb-3">
+              <h2 className="text-base font-black text-slate-950 flex items-center gap-2">
                 <Car className="w-5 h-5 text-emerald-600" />
                 <span>إضافة سيارة جديدة للزبون: {customer.fullName}</span>
               </h2>
-              <button onClick={() => setAddCarModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-700">
+              <button onClick={() => setAddCarModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-800">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleAddCarSubmit} className="space-y-3 text-xs">
+            <form onSubmit={handleAddCarSubmit} className="space-y-3.5 text-sm">
               <div>
-                <label className="block text-slate-700 mb-1 font-bold">نوع وموديل السيارة الجديدة</label>
+                <label className="block text-slate-800 mb-1 font-black">نوع وموديل السيارة الجديدة</label>
                 <input
                   type="text"
                   required
                   placeholder="مثال: تاهو / سوناتا / بيك اب"
                   value={newCarForm.makeModel}
                   onChange={(e) => setNewCarForm({ ...newCarForm, makeModel: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-bold"
+                  className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-black"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-700 mb-1 font-bold">رقم اللوحة</label>
+                <label className="block text-slate-800 mb-1 font-black">رقم اللوحة (مثال: 14 G 34567)</label>
                 <input
                   type="text"
                   required
-                  placeholder="بغداد 99887"
+                  dir="ltr"
+                  placeholder="14 G 34567"
                   value={newCarForm.plateNumber}
                   onChange={(e) => setNewCarForm({ ...newCarForm, plateNumber: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono font-bold"
+                  className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-mono font-black text-center"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="flex justify-center py-1">
+                <IraqiPlateBadge plateNumber={newCarForm.plateNumber} size="md" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-700 mb-1 font-bold">حجم المحرك</label>
+                  <label className="block text-slate-800 mb-1 font-black">حجم المحرك</label>
                   <input
                     type="text"
                     value={newCarForm.engineSize}
                     onChange={(e) => setNewCarForm({ ...newCarForm, engineSize: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono"
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-700 mb-1 font-bold">العداد الحالي (كم)</label>
+                  <label className="block text-slate-800 mb-1 font-black">العداد الحالي (كم)</label>
                   <input
                     type="number"
                     value={newCarForm.lastOdometer}
                     onChange={(e) => setNewCarForm({ ...newCarForm, lastOdometer: Number(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono"
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
                   />
                 </div>
               </div>
@@ -1127,7 +1259,7 @@ export default function WorkshopPOSPage() {
                 <button
                   type="submit"
                   disabled={creatingCustomer}
-                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center justify-center gap-2"
+                  className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center justify-center gap-2"
                 >
                   {creatingCustomer ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                   <span>إضافة السيارة لملف الزبون</span>
@@ -1135,7 +1267,7 @@ export default function WorkshopPOSPage() {
                 <button
                   type="button"
                   onClick={() => setAddCarModalOpen(false)}
-                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+                  className="px-4 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black rounded-xl"
                 >
                   إلغاء
                 </button>
