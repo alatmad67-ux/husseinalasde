@@ -8,10 +8,9 @@ import {
   updateProduct, 
   deleteProduct 
 } from '@/services/firestoreService';
-import { ProductDoc } from '@/types/firestore';
+import { ProductDoc, ProductCategory, PRODUCT_CATEGORY_LABELS } from '@/types/firestore';
 import { 
   Droplet, 
-  AlertTriangle, 
   Plus, 
   Edit3, 
   Trash2, 
@@ -20,19 +19,12 @@ import {
   X, 
   Save, 
   Loader2,
-  Package
+  Package,
+  Layers
 } from 'lucide-react';
 
 export default function FluidInventoryPage() {
-  const [products, setProducts] = useState<ProductDoc[]>([
-    { id: 'prod-1', name: 'Mobil 1 ESP 5W-30 (تخليقي بالكامل)', category: 'engine_oil', viscosity: '5W30', packageSizeLiters: 5, totalLitersStock: 48.5, unitCost: 9000, salePrice: 12000 },
-    { id: 'prod-2', name: 'Castrol Magnatec 10W-40', category: 'engine_oil', viscosity: '10W40', packageSizeLiters: 4, totalLitersStock: 32.0, unitCost: 7000, salePrice: 9500 },
-    { id: 'prod-3', name: 'Liqui Moly Molygen 5W-40', category: 'engine_oil', viscosity: '5W40', packageSizeLiters: 5, totalLitersStock: 14.5, unitCost: 10500, salePrice: 13500 },
-    { id: 'prod-4', name: 'Toyota Genuine ATF WS (دهن گير)', category: 'gear_oil', viscosity: 'ATF WS', packageSizeLiters: 4, totalLitersStock: 20.0, unitCost: 11000, salePrice: 15000 },
-    { id: 'prod-5', name: 'فلتر زيت أصلي تويوتا', category: 'filter', viscosity: '90915-YZZE2', packageSizeLiters: 1, totalLitersStock: 18, unitCost: 4500, salePrice: 7000 },
-    { id: 'prod-6', name: 'ماء راديتر بريستون أصلي 50/50 أمريكي', category: 'coolant', viscosity: 'Prestone Red', packageSizeLiters: 4, totalLitersStock: 12.0, unitCost: 10000, salePrice: 14000 }
-  ]);
-
+  const [products, setProducts] = useState<ProductDoc[]>([]);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -41,14 +33,19 @@ export default function FluidInventoryPage() {
   // Modal State for Add / Edit
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+
   const [formData, setFormData] = useState({
     name: '',
-    category: 'engine_oil' as 'engine_oil' | 'filter' | 'coolant' | 'gear_oil',
-    viscosity: '',
+    category: 'engine_oil' as ProductCategory,
+    sizesInput: '10W30, 10W40, 20W50', // Comma separated sizes/viscosities
+    cartonsCount: 5,
+    piecesPerCarton: 4,
     packageSizeLiters: 4,
-    totalLitersStock: 20,
-    unitCost: 8000,
-    salePrice: 12000
+    totalPiecesStock: 20,
+    totalLitersStock: 80,
+    unitCost: 8500,
+    directSalePrice: 11000,
+    serviceSalePrice: 12500
   });
 
   const loadData = async () => {
@@ -58,7 +55,7 @@ export default function FluidInventoryPage() {
         setProducts(list);
       }
     } catch (err) {
-      console.warn('Could not load products from Firestore, using default catalog:', err);
+      console.warn('Could not load products from Firestore:', err);
     }
   };
 
@@ -66,30 +63,60 @@ export default function FluidInventoryPage() {
     loadData();
   }, []);
 
+  // Auto-calculate totalPiecesStock & totalLitersStock when cartons, piecesPerCarton, or packageSizeLiters change
+  const updateStockCalculations = (
+    cartons: number,
+    piecesPerCarton: number,
+    litersPerPiece: number
+  ) => {
+    const totalPieces = Number(cartons) * Number(piecesPerCarton);
+    const totalLiters = Number((totalPieces * Number(litersPerPiece)).toFixed(2));
+    setFormData((prev) => ({
+      ...prev,
+      cartonsCount: cartons,
+      piecesPerCarton: piecesPerCarton,
+      packageSizeLiters: litersPerPiece,
+      totalPiecesStock: totalPieces,
+      totalLitersStock: totalLiters
+    }));
+  };
+
   const openAddModal = () => {
     setEditingId(null);
     setFormData({
       name: '',
       category: 'engine_oil',
-      viscosity: '',
+      sizesInput: '10W30, 10W40, 20W50',
+      cartonsCount: 5,
+      piecesPerCarton: 4,
       packageSizeLiters: 4,
-      totalLitersStock: 20,
+      totalPiecesStock: 20,
+      totalLitersStock: 80,
       unitCost: 8000,
-      salePrice: 12000
+      directSalePrice: 10500,
+      serviceSalePrice: 12000
     });
     setModalOpen(true);
   };
 
   const openEditModal = (p: ProductDoc) => {
     setEditingId(p.id || null);
+    const sizesStr = p.availableSizes && p.availableSizes.length > 0
+      ? p.availableSizes.join(', ')
+      : (p.viscosity || '');
+
     setFormData({
       name: p.name,
       category: p.category,
-      viscosity: p.viscosity || '',
-      packageSizeLiters: p.packageSizeLiters,
-      totalLitersStock: p.totalLitersStock,
-      unitCost: p.unitCost,
-      salePrice: p.salePrice
+      sizesInput: sizesStr,
+      cartonsCount: p.cartonsCount ?? 1,
+      piecesPerCarton: p.piecesPerCarton ?? 1,
+      packageSizeLiters: p.packageSizeLiters ?? 4,
+      totalPiecesStock: p.totalPiecesStock ?? 1,
+      totalLitersStock: p.totalLitersStock ?? 4,
+      unitCost: p.unitCost ?? 0,
+      directSalePrice: p.directSalePrice ?? p.salePrice ?? 0,
+      serviceSalePrice: p.serviceSalePrice ?? p.salePrice ?? 0
     });
     setModalOpen(true);
   };
@@ -98,36 +125,41 @@ export default function FluidInventoryPage() {
     e.preventDefault();
     setLoading(true);
 
+    const parsedSizes = formData.sizesInput
+      .split(/[,،]+/)
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const productPayload: Omit<ProductDoc, 'id'> = {
+      name: formData.name.trim(),
+      category: formData.category,
+      availableSizes: parsedSizes,
+      viscosity: parsedSizes[0] || '',
+      cartonsCount: Number(formData.cartonsCount),
+      piecesPerCarton: Number(formData.piecesPerCarton),
+      packageSizeLiters: Number(formData.packageSizeLiters),
+      totalPiecesStock: Number(formData.totalPiecesStock),
+      totalLitersStock: Number(formData.totalLitersStock),
+      unitCost: Number(formData.unitCost),
+      directSalePrice: Number(formData.directSalePrice),
+      serviceSalePrice: Number(formData.serviceSalePrice),
+      salePrice: Number(formData.serviceSalePrice)
+    };
+
     try {
       if (editingId) {
-        await updateProduct(editingId, {
-          name: formData.name,
-          category: formData.category,
-          viscosity: formData.viscosity,
-          packageSizeLiters: Number(formData.packageSizeLiters),
-          totalLitersStock: Number(formData.totalLitersStock),
-          unitCost: Number(formData.unitCost),
-          salePrice: Number(formData.salePrice)
-        });
-        setProducts(prev => prev.map(p => p.id === editingId ? { ...p, ...formData } : p));
-        setSuccessMsg('تم تعديل المنتج والمخزون بنجاح في Firestore!');
+        await updateProduct(editingId, productPayload);
+        setProducts(prev => prev.map(p => p.id === editingId ? { id: editingId, ...productPayload } : p));
+        setSuccessMsg('تم تحديث بيانات المنتج والكميات والأسعار بنجاح!');
       } else {
-        const res = await addProduct({
-          name: formData.name,
-          category: formData.category,
-          viscosity: formData.viscosity,
-          packageSizeLiters: Number(formData.packageSizeLiters),
-          totalLitersStock: Number(formData.totalLitersStock),
-          unitCost: Number(formData.unitCost),
-          salePrice: Number(formData.salePrice)
-        });
-        setProducts(prev => [...prev, { id: res.id, ...formData }]);
-        setSuccessMsg('تمت إضافة المنتج الجديد إلى المخزون في Firestore!');
+        const res = await addProduct(productPayload);
+        setProducts(prev => [...prev, { id: res.id, ...productPayload }]);
+        setSuccessMsg('تمت إضافة المنتج الجديد مع حساب الكراتين واللترات بنجاح!');
       }
       setModalOpen(false);
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء حفظ المنتج في Firestore.');
+      alert(err.message || 'حدث خطأ أثناء حفظ المنتج.');
     } finally {
       setLoading(false);
     }
@@ -148,130 +180,162 @@ export default function FluidInventoryPage() {
 
   const filtered = products.filter((p) => {
     const matchesCat = categoryFilter === 'all' || p.category === categoryFilter;
-    const matchesSearch = p.name.toLowerCase().includes(search.toLowerCase()) || 
-                          (p.viscosity && p.viscosity.toLowerCase().includes(search.toLowerCase()));
+    const sizesStr = (p.availableSizes || []).join(' ');
+    const matchesSearch =
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      sizesStr.toLowerCase().includes(search.toLowerCase()) ||
+      (p.viscosity && p.viscosity.toLowerCase().includes(search.toLowerCase()));
     return matchesCat && matchesSearch;
   });
 
   return (
-    <div className="min-h-screen flex flex-col bg-industrial-950">
+    <div className="min-h-screen flex flex-col bg-slate-50">
       <HeaderNav />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 space-y-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 space-y-5">
         
-        {/* Header Title & Top Actions */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        {/* Header Title & Add Button */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-            <h1 className="text-xl md:text-2xl font-black text-white flex items-center gap-2">
-              <Droplet className="w-6 h-6 text-brand-amber" />
-              <span>إدارة مخزون السوائل والزيوت باللتر والقطع</span>
+            <h1 className="text-xl sm:text-2xl font-black text-slate-900 flex items-center gap-2">
+              <Droplet className="w-6 h-6 text-amber-600" />
+              <span>إدارة المخزون (بالكرتون، القطعة، واللتر) والأسعار</span>
             </h1>
-            <p className="text-xs md:text-sm text-slate-400 mt-1">
-              متابعة دقيقة وتعديل كميات المخزون والأسعار وإضافة منتجات جديدة لمركز حسين الاسدي.
+            <p className="text-xs text-slate-500 mt-1 font-medium">
+              إضافة وتعديل الزيوت بعدة قياسات (Sizes)، حساب تلقائي للكراتين والعبوات، وتسعير مزدوج (مباشر / مع الخدمة).
             </p>
           </div>
 
           <button
             onClick={openAddModal}
-            className="flex items-center gap-2 bg-brand-amber hover:bg-brand-amberHover text-industrial-950 px-4 py-2.5 rounded-xl font-bold text-xs shadow-lg shadow-amber-500/20 transition w-full md:w-auto justify-center"
+            className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-xl font-black text-xs shadow-md shadow-amber-500/20 transition w-full md:w-auto justify-center"
           >
             <Plus className="w-4 h-4 stroke-[3]" />
-            <span>إضافة منتج جديد للمخزون</span>
+            <span>+ إضافة منتج جديد للمخزون</span>
           </button>
         </div>
 
         {/* Success Alert */}
         {successMsg && (
-          <div className="bg-brand-emerald/15 border border-brand-emerald/40 text-brand-emerald p-4 rounded-xl flex items-center gap-3">
-            <CheckCircle className="w-5 h-5 flex-shrink-0" />
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-xl flex items-center gap-3">
+            <CheckCircle className="w-5 h-5 flex-shrink-0 text-emerald-600" />
             <p className="font-bold text-sm">{successMsg}</p>
           </div>
         )}
 
-        {/* Search & Filter Bar */}
-        <div className="bg-industrial-900 border border-industrial-800 rounded-2xl p-4 flex flex-col sm:flex-row gap-3 items-center justify-between shadow-lg">
+        {/* Search & Category Filter */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row gap-3 items-center justify-between shadow-sm">
           <div className="relative flex-1 w-full">
             <Search className="absolute right-3.5 top-3 w-4 h-4 text-slate-400" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="بحث بالاسم، اللزوجة، كود الفلتر..."
-              className="w-full bg-industrial-950 border border-industrial-700 rounded-xl pr-10 pl-4 py-2.5 text-xs text-white focus:outline-none focus:border-brand-amber font-mono"
+              placeholder="بحث باسم الزيت، العيار (10W40, 5W30)، كود الفلتر..."
+              className="w-full bg-slate-50 border border-slate-300 rounded-xl pr-10 pl-4 py-2.5 text-xs text-slate-900 font-bold focus:outline-none focus:border-amber-500 focus:bg-white"
             />
           </div>
 
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
-            className="w-full sm:w-auto bg-industrial-950 border border-industrial-700 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-brand-amber"
+            className="w-full sm:w-auto bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-amber-500"
           >
-            <option value="all">كل الفئات</option>
-            <option value="engine_oil">زيوت المحرك</option>
-            <option value="gear_oil">زيوت القير والدفرنش</option>
-            <option value="filter">فلاتر الزيت والهواء</option>
-            <option value="coolant">ماء الراديتر والمبردات</option>
+            <option value="all">كل الفئات ({products.length})</option>
+            {Object.entries(PRODUCT_CATEGORY_LABELS).map(([key, label]) => (
+              <option key={key} value={key}>{label}</option>
+            ))}
           </select>
         </div>
 
-        {/* Responsive Inventory Table / Card Grid */}
-        <div className="bg-industrial-900 border border-industrial-800 rounded-2xl overflow-hidden shadow-xl">
+        {/* Inventory Table & Cards */}
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           
-          {/* Desktop Table View */}
+          {/* Desktop Table */}
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-right text-xs">
-              <thead className="bg-industrial-950 text-slate-400 border-b border-industrial-800">
+              <thead className="bg-slate-100 text-slate-700 font-black border-b border-slate-200">
                 <tr>
-                  <th className="py-3 px-4">اسم المنتج / الصنف</th>
-                  <th className="py-3 px-4">الفئة</th>
-                  <th className="py-3 px-4">اللزوجة / الكود</th>
-                  <th className="py-3 px-4">العبوة الأصلية</th>
-                  <th className="py-3 px-4">الرصيد الفعلي (باللتر أو القطعة)</th>
-                  <th className="py-3 px-4">سعر المفرد</th>
-                  <th className="py-3 px-4">إجراءات الإدارة</th>
+                  <th className="py-3.5 px-4">اسم المنتج والنوع</th>
+                  <th className="py-3.5 px-4">القياسات / اللزوجة المتوفرة</th>
+                  <th className="py-3.5 px-4">التعبئة (كرتون / قطعة / لتر)</th>
+                  <th className="py-3.5 px-4">الرصيد الكلي</th>
+                  <th className="py-3.5 px-4">سعر الشراء</th>
+                  <th className="py-3.5 px-4">سعر البيع فقط</th>
+                  <th className="py-3.5 px-4">سعر البيع مع التبديل</th>
+                  <th className="py-3.5 px-4">إجراءات</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-industrial-800 text-slate-200">
+              <tbody className="divide-y divide-slate-200 text-slate-800">
                 {filtered.map((item) => {
                   const isLow = item.totalLitersStock <= 15;
+                  const sizes = item.availableSizes && item.availableSizes.length > 0
+                    ? item.availableSizes
+                    : (item.viscosity ? [item.viscosity] : []);
+
                   return (
-                    <tr key={item.id} className="hover:bg-industrial-800/40 transition">
-                      <td className="py-3.5 px-4 font-bold text-white flex items-center gap-2">
-                        <Droplet className={`w-4 h-4 ${isLow ? 'text-brand-danger' : 'text-brand-amber'}`} />
-                        <span>{item.name}</span>
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-400 font-mono">
-                        {item.category === 'engine_oil' ? 'زيت محرك' : item.category === 'filter' ? 'فلتر' : item.category === 'gear_oil' ? 'زيت قير' : 'مبردات'}
-                      </td>
-                      <td className="py-3.5 px-4 font-mono font-bold text-brand-amber">
-                        {item.viscosity || '—'}
-                      </td>
-                      <td className="py-3.5 px-4 font-mono">
-                        {item.packageSizeLiters} لتر
-                      </td>
-                      <td className="py-3.5 px-4 font-mono font-black text-sm">
-                        <span className={isLow ? 'text-brand-danger' : 'text-brand-emerald'}>
-                          {item.totalLitersStock} {item.category === 'filter' ? 'قطعة' : 'لتر'}
+                    <tr key={item.id} className="hover:bg-slate-50 transition">
+                      <td className="py-3.5 px-4">
+                        <div className="font-black text-slate-900 text-sm">{item.name}</div>
+                        <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 inline-block mt-1">
+                          {PRODUCT_CATEGORY_LABELS[item.category] || item.category}
                         </span>
                       </td>
-                      <td className="py-3.5 px-4 font-mono font-bold">
-                        {item.salePrice.toLocaleString()} د.ع
-                      </td>
+
                       <td className="py-3.5 px-4">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap gap-1">
+                          {sizes.map((sz) => (
+                            <span
+                              key={sz}
+                              className="px-2 py-0.5 bg-slate-100 border border-slate-300 rounded-md font-mono font-bold text-slate-800 text-[11px]"
+                            >
+                              {sz}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4 font-mono text-xs text-slate-600">
+                        <div>{item.cartonsCount || 0} كرتون × {item.piecesPerCarton || 1} قطع</div>
+                        <div className="text-[11px] text-slate-500">حجم العبوة: {item.packageSizeLiters} لتر</div>
+                      </td>
+
+                      <td className="py-3.5 px-4 font-mono">
+                        <div className={`font-black text-sm ${isLow ? 'text-red-600' : 'text-emerald-700'}`}>
+                          {item.totalLitersStock} {item.category === 'filter' || item.category === 'flush' || item.category === 'anti_smoke' ? 'قطعة' : 'لتر'}
+                        </div>
+                        {item.totalPiecesStock && (
+                          <div className="text-[11px] text-slate-500">({item.totalPiecesStock} عبوة)</div>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-4 font-mono font-bold text-slate-500">
+                        {(item.unitCost || 0).toLocaleString()} د.ع
+                      </td>
+
+                      <td className="py-3.5 px-4 font-mono font-black text-blue-700">
+                        {(item.directSalePrice || item.salePrice || 0).toLocaleString()} د.ع
+                      </td>
+
+                      <td className="py-3.5 px-4 font-mono font-black text-amber-700">
+                        {(item.serviceSalePrice || item.salePrice || 0).toLocaleString()} د.ع
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <div className="flex items-center gap-1.5">
                           <button
                             onClick={() => openEditModal(item)}
-                            title="تعديل المنتج أو المخزون"
-                            className="p-1.5 rounded-lg bg-industrial-800 hover:bg-brand-amber hover:text-industrial-950 text-slate-300 transition"
+                            className="p-2 rounded-lg bg-slate-100 hover:bg-amber-500 hover:text-white text-slate-700 transition"
+                            title="تعديل"
                           >
-                            <Edit3 className="w-3.5 h-3.5" />
+                            <Edit3 className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => handleDelete(item.id!, item.name)}
-                            title="حذف من المخزون"
-                            className="p-1.5 rounded-lg bg-industrial-800 hover:bg-brand-danger hover:text-white text-slate-400 transition"
+                            className="p-2 rounded-lg bg-red-50 hover:bg-red-600 hover:text-white text-red-600 transition"
+                            title="حذف"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       </td>
@@ -282,50 +346,54 @@ export default function FluidInventoryPage() {
             </table>
           </div>
 
-          {/* Mobile Card View (optimized for touch screens) */}
-          <div className="md:hidden divide-y divide-industrial-800">
+          {/* Mobile Responsive Cards */}
+          <div className="md:hidden divide-y divide-slate-200">
             {filtered.map((item) => {
-              const isLow = item.totalLitersStock <= 15;
+              const sizes = item.availableSizes && item.availableSizes.length > 0
+                ? item.availableSizes
+                : (item.viscosity ? [item.viscosity] : []);
+
               return (
                 <div key={item.id} className="p-4 space-y-3">
-                  <div className="flex justify-between items-start gap-2">
+                  <div className="flex justify-between items-start">
                     <div>
-                      <span className="text-[10px] font-bold text-brand-amber bg-brand-amber/10 px-2 py-0.5 rounded">
-                        {item.category}
+                      <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                        {PRODUCT_CATEGORY_LABELS[item.category] || item.category}
                       </span>
-                      <h3 className="font-bold text-white text-sm mt-1">{item.name}</h3>
-                      {item.viscosity && (
-                        <p className="text-xs text-brand-amber font-mono font-bold mt-0.5">{item.viscosity}</p>
-                      )}
+                      <h3 className="font-black text-slate-900 text-sm mt-1">{item.name}</h3>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => openEditModal(item)}
-                        className="p-2 rounded-lg bg-industrial-800 text-slate-300"
-                      >
+                    <div className="flex gap-1.5">
+                      <button onClick={() => openEditModal(item)} className="p-2 bg-slate-100 rounded-lg text-slate-700">
                         <Edit3 className="w-4 h-4" />
                       </button>
-                      <button
-                        onClick={() => handleDelete(item.id!, item.name)}
-                        className="p-2 rounded-lg bg-industrial-800 text-red-400"
-                      >
+                      <button onClick={() => handleDelete(item.id!, item.name)} className="p-2 bg-red-50 rounded-lg text-red-600">
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
 
-                  <div className="flex justify-between items-center bg-industrial-950 p-2.5 rounded-xl border border-industrial-800 text-xs">
+                  {/* Sizes */}
+                  <div className="flex flex-wrap gap-1">
+                    {sizes.map((sz) => (
+                      <span key={sz} className="px-2 py-0.5 bg-slate-100 border border-slate-300 rounded font-mono font-bold text-xs">
+                        {sz}
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Stock & Dual Prices */}
+                  <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-xs">
                     <div>
-                      <span className="text-slate-400 block text-[10px]">الرصيد المتاح:</span>
-                      <strong className={`font-mono font-black ${isLow ? 'text-brand-danger' : 'text-brand-emerald'}`}>
-                        {item.totalLitersStock} {item.category === 'filter' ? 'قطعة' : 'لتر'}
-                      </strong>
+                      <span className="text-[10px] text-slate-500 block">الرصيد الكلي:</span>
+                      <strong className="font-mono text-emerald-700">{item.totalLitersStock} لتر</strong>
                     </div>
-                    <div className="text-left">
-                      <span className="text-slate-400 block text-[10px]">السعر:</span>
-                      <strong className="font-mono text-white">
-                        {item.salePrice.toLocaleString()} د.ع
-                      </strong>
+                    <div>
+                      <span className="text-[10px] text-slate-500 block">بيع فقط:</span>
+                      <strong className="font-mono text-blue-700">{(item.directSalePrice || item.salePrice).toLocaleString()}</strong>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 block">مع التبديل:</span>
+                      <strong className="font-mono text-amber-700">{(item.serviceSalePrice || item.salePrice).toLocaleString()}</strong>
                     </div>
                   </div>
                 </div>
@@ -337,126 +405,203 @@ export default function FluidInventoryPage() {
 
       </main>
 
-      {/* Modal: Add / Edit Product */}
+      {/* Modal: Add / Edit Product with Carton/Piece/Liter Calculator & Dual Pricing */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
-          <div className="bg-industrial-900 border border-industrial-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
             
-            <div className="flex justify-between items-center border-b border-industrial-800 pb-3">
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <Package className="w-5 h-5 text-brand-amber" />
-                <span>{editingId ? 'تعديل بيانات المنتج والمخزون' : 'إضافة منتج جديد للمخزن'}</span>
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
+                <Package className="w-5 h-5 text-amber-600" />
+                <span>{editingId ? 'تعديل المنتج وحساب المخزون' : 'إضافة منتج جديد للمخزون'}</span>
               </h2>
-              <button
-                onClick={() => setModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
-              >
+              <button onClick={() => setModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-700">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleFormSubmit} className="space-y-3.5 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-300 mb-1">اسم المنتج الكامل</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="مثال: Mobil 1 ESP 5W-30"
-                  className="w-full bg-industrial-950 border border-industrial-700 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-brand-amber"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+            <form onSubmit={handleFormSubmit} className="space-y-4 text-xs">
+              
+              {/* Name & Category */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-300 mb-1">الفئة</label>
+                  <label className="block font-bold text-slate-700 mb-1">اسم المنتج / الماركة</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="مثال: دهن يورال (Eural) أو كاسترول"
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-900 font-bold focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">فئة المنتج</label>
                   <select
                     value={formData.category}
                     onChange={(e: any) => setFormData({ ...formData, category: e.target.value })}
-                    className="w-full bg-industrial-950 border border-industrial-700 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-brand-amber"
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-900 font-bold focus:outline-none focus:border-amber-500"
                   >
-                    <option value="engine_oil">زيت محرك</option>
-                    <option value="gear_oil">زيت قير</option>
-                    <option value="filter">فلتر</option>
-                    <option value="coolant">ماء راديتر</option>
+                    {Object.entries(PRODUCT_CATEGORY_LABELS).map(([k, label]) => (
+                      <option key={k} value={k}>{label}</option>
+                    ))}
                   </select>
                 </div>
+              </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-300 mb-1">اللزوجة أو كود القطعة</label>
-                  <input
-                    type="text"
-                    value={formData.viscosity}
-                    onChange={(e) => setFormData({ ...formData, viscosity: e.target.value })}
-                    placeholder="5W30 أو 90915-YZZE2"
-                    className="w-full bg-industrial-950 border border-industrial-700 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-brand-amber font-mono"
-                  />
+              {/* Multi-Sizes Input */}
+              <div className="bg-amber-50/60 p-3.5 rounded-2xl border border-amber-200 space-y-1.5">
+                <label className="block font-black text-amber-900">
+                  القياسات / العيارات المتوفرة لنفس المنتج (افصل بينها بفاصلة ,)
+                </label>
+                <input
+                  type="text"
+                  value={formData.sizesInput}
+                  onChange={(e) => setFormData({ ...formData, sizesInput: e.target.value })}
+                  placeholder="مثال: 10W30, 10W40, 20W50, 5W30"
+                  className="w-full bg-white border border-amber-300 rounded-xl px-3.5 py-2.5 text-slate-900 font-mono font-bold focus:outline-none"
+                />
+                <p className="text-[11px] text-amber-700">
+                  * يمكنك كتابة أكثر من قياس لمنتج واحد (مثل يورال 10W30, 10W40, 20W50) لتختار منها في شاشة الكاونتر.
+                </p>
+              </div>
+
+              {/* Automatic Carton -> Piece -> Liter Calculator */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <div className="flex items-center gap-1.5 font-black text-slate-800">
+                  <Layers className="w-4 h-4 text-amber-600" />
+                  <span>الحاسبة التلقائية للمخزون (بالكرتون والقطعة واللتر):</span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block font-bold text-slate-600 mb-1">عدد الكراتين</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formData.cartonsCount}
+                      onChange={(e) =>
+                        updateStockCalculations(
+                          Number(e.target.value),
+                          formData.piecesPerCarton,
+                          formData.packageSizeLiters
+                        )
+                      }
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 font-mono font-black text-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-600 mb-1">كم قطعة بالكرتون؟</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={formData.piecesPerCarton}
+                      onChange={(e) =>
+                        updateStockCalculations(
+                          formData.cartonsCount,
+                          Number(e.target.value),
+                          formData.packageSizeLiters
+                        )
+                      }
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 font-mono font-black text-slate-900"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-600 mb-1">حجم القطعة (كم لتر؟)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      value={formData.packageSizeLiters}
+                      onChange={(e) =>
+                        updateStockCalculations(
+                          formData.cartonsCount,
+                          formData.piecesPerCarton,
+                          Number(e.target.value)
+                        )
+                      }
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 font-mono font-black text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-200">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">إجمالي عدد القطع / العبوات</label>
+                    <input
+                      type="number"
+                      value={formData.totalPiecesStock}
+                      onChange={(e) => setFormData({ ...formData, totalPiecesStock: Number(e.target.value) })}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 font-mono font-black text-blue-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-emerald-800 mb-1">الرصيد الكلي المحسوب (باللتر/القطعة)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={formData.totalLitersStock}
+                      onChange={(e) => setFormData({ ...formData, totalLitersStock: Number(e.target.value) })}
+                      className="w-full bg-emerald-50 border border-emerald-300 rounded-xl px-3 py-2 font-mono font-black text-emerald-800"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-300 mb-1">سعة العبوة الأصلية (لتر)</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    required
-                    value={formData.packageSizeLiters}
-                    onChange={(e) => setFormData({ ...formData, packageSizeLiters: Number(e.target.value) })}
-                    className="w-full bg-industrial-950 border border-industrial-700 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-brand-amber font-mono"
-                  />
-                </div>
+              {/* Dual Pricing Section */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <span className="font-black text-slate-800 block">التسعير (سعر التكلفة / البيع المباشر / البيع مع الخدمة):</span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block font-bold text-slate-600 mb-1">سعر الشراء (التكلفة)</label>
+                    <input
+                      type="number"
+                      value={formData.unitCost}
+                      onChange={(e) => setFormData({ ...formData, unitCost: Number(e.target.value) })}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 font-mono font-bold text-slate-700"
+                    />
+                  </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-300 mb-1">الرصيد الكلي المتاح (لتر/قطع)</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    required
-                    value={formData.totalLitersStock}
-                    onChange={(e) => setFormData({ ...formData, totalLitersStock: Number(e.target.value) })}
-                    className="w-full bg-industrial-950 border border-industrial-700 rounded-xl px-3.5 py-2.5 text-brand-emerald font-bold focus:outline-none focus:border-brand-amber font-mono"
-                  />
-                </div>
-              </div>
+                  <div>
+                    <label className="block font-bold text-blue-700 mb-1">سعر البيع فقط (بدون تبديل)</label>
+                    <input
+                      type="number"
+                      required
+                      value={formData.directSalePrice}
+                      onChange={(e) => setFormData({ ...formData, directSalePrice: Number(e.target.value) })}
+                      className="w-full bg-blue-50 border border-blue-300 rounded-xl px-3 py-2 font-mono font-black text-blue-800"
+                    />
+                  </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-300 mb-1">سعر الشراء / التكلفة (د.ع)</label>
-                  <input
-                    type="number"
-                    value={formData.unitCost}
-                    onChange={(e) => setFormData({ ...formData, unitCost: Number(e.target.value) })}
-                    className="w-full bg-industrial-950 border border-industrial-700 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-brand-amber font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-300 mb-1">سعر البيع للزبون (د.ع)</label>
-                  <input
-                    type="number"
-                    required
-                    value={formData.salePrice}
-                    onChange={(e) => setFormData({ ...formData, salePrice: Number(e.target.value) })}
-                    className="w-full bg-industrial-950 border border-industrial-700 rounded-xl px-3.5 py-2.5 text-brand-amber font-bold focus:outline-none focus:border-brand-amber font-mono"
-                  />
+                  <div>
+                    <label className="block font-bold text-amber-700 mb-1">سعر البيع مع التبديل والخدمة</label>
+                    <input
+                      type="number"
+                      required
+                      value={formData.serviceSalePrice}
+                      onChange={(e) => setFormData({ ...formData, serviceSalePrice: Number(e.target.value) })}
+                      className="w-full bg-amber-50 border border-amber-300 rounded-xl px-3 py-2 font-mono font-black text-amber-800"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="pt-3 flex gap-2">
+              <div className="pt-2 flex gap-2">
                 <button
                   type="submit"
                   disabled={loading}
-                  className="flex-1 py-3 bg-brand-amber hover:bg-brand-amberHover disabled:opacity-50 text-industrial-950 font-black rounded-xl flex items-center justify-center gap-2 transition"
+                  className="flex-1 py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl flex items-center justify-center gap-2 shadow-md"
                 >
                   {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                  <span>{editingId ? 'حفظ التعديلات' : 'إضافة إلى المخزون'}</span>
+                  <span>{editingId ? 'حفظ التعديلات' : 'إضافة المنتج للمخزون'}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
-                  className="px-4 py-3 bg-industrial-800 hover:bg-industrial-700 text-slate-300 font-bold rounded-xl"
+                  className="px-5 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
                 >
                   إلغاء
                 </button>

@@ -17,10 +17,10 @@ const AuthContext = createContext<AuthContextType>({
   logout: () => {},
 });
 
-// Admin credentials as requested
-const ADMIN_PHONE = '07600505015';
+// Updated Admin credentials as requested: 07800505015
+const ADMIN_PHONE = '07800505015';
 const ADMIN_PASS = '2026#123';
-const AUTH_STORAGE_KEY = 'asadi_admin_auth';
+const AUTH_STORAGE_KEY = 'asadi_admin_auth_v2';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -42,7 +42,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!mounted) return;
 
-    // Public routes that anyone (customers scanning QR stickers) can access without login
     const isPublicRoute = pathname.startsWith('/public/') || pathname === '/login';
 
     if (!isAuthenticated && !isPublicRoute) {

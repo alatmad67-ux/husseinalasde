@@ -8,11 +8,10 @@ import {
   orderBy,
   runTransaction,
   serverTimestamp,
-  increment,
   addDoc,
   updateDoc,
-  setDoc,
-  limit
+  limit,
+  deleteDoc
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import {
@@ -25,16 +24,21 @@ import {
 } from '@/types/firestore';
 
 // ==============================================================================
-// 1. SEARCH CUSTOMER OR VEHICLE
-// Performs fast lookup across customers (by phone / name) and vehicles (by plate)
+// 1. SEARCH CUSTOMER OR VEHICLE (Returns Customer + All their Registered Vehicles)
 // ==============================================================================
-export async function searchCustomerOrVehicle(queryStr: string) {
+export async function searchCustomerOrVehicle(queryStr: string): Promise<{
+  customer: CustomerDoc;
+  vehicles: VehicleDoc[];
+  vehicle: VehicleDoc | null;
+} | null> {
   const cleanQuery = queryStr.trim();
   if (!cleanQuery) return null;
 
   try {
-    // 1. Try querying customers by exact phone number
     const customersRef = collection(db, 'customers');
+    const vehiclesRef = collection(db, 'vehicles');
+
+    // 1. Try querying customers by exact phone number
     const phoneQ = query(customersRef, where('phoneNumber', '==', cleanQuery), limit(1));
     const phoneSnap = await getDocs(phoneQ);
 
@@ -42,33 +46,38 @@ export async function searchCustomerOrVehicle(queryStr: string) {
       const customerDoc = phoneSnap.docs[0];
       const customerData = { id: customerDoc.id, ...customerDoc.data() } as CustomerDoc;
 
-      // Find primary vehicle for this customer
-      const vehiclesRef = collection(db, 'vehicles');
-      const vehQ = query(vehiclesRef, where('customerId', '==', customerDoc.id), limit(1));
+      const vehQ = query(vehiclesRef, where('customerId', '==', customerDoc.id));
       const vehSnap = await getDocs(vehQ);
-      const vehicleData = !vehSnap.empty
-        ? ({ id: vehSnap.docs[0].id, ...vehSnap.docs[0].data() } as VehicleDoc)
-        : null;
+      const vehicles = vehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
 
-      return { customer: customerData, vehicle: vehicleData };
+      return {
+        customer: customerData,
+        vehicles,
+        vehicle: vehicles[0] || null
+      };
     }
 
     // 2. Try querying vehicles by plate number
-    const vehiclesRef = collection(db, 'vehicles');
     const plateQ = query(vehiclesRef, where('plateNumber', '==', cleanQuery), limit(1));
     const plateSnap = await getDocs(plateQ);
 
     if (!plateSnap.empty) {
-      const vehDoc = plateSnap.docs[0];
-      const vehicleData = { id: vehDoc.id, ...vehDoc.data() } as VehicleDoc;
+      const matchedVehDoc = plateSnap.docs[0];
+      const matchedVehicle = { id: matchedVehDoc.id, ...matchedVehDoc.data() } as VehicleDoc;
 
-      // Fetch customer
-      const customerSnap = await getDoc(doc(db, 'customers', vehicleData.customerId));
-      const customerData = customerSnap.exists()
-        ? ({ id: customerSnap.id, ...customerSnap.data() } as CustomerDoc)
-        : null;
+      const customerSnap = await getDoc(doc(db, 'customers', matchedVehicle.customerId));
+      if (customerSnap.exists()) {
+        const customerData = { id: customerSnap.id, ...customerSnap.data() } as CustomerDoc;
+        const allVehQ = query(vehiclesRef, where('customerId', '==', customerSnap.id));
+        const allVehSnap = await getDocs(allVehQ);
+        const vehicles = allVehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
 
-      return { customer: customerData, vehicle: vehicleData };
+        return {
+          customer: customerData,
+          vehicles,
+          vehicle: matchedVehicle
+        };
+      }
     }
 
     // 3. Fallback: Query customer by fullName prefix
@@ -84,13 +93,15 @@ export async function searchCustomerOrVehicle(queryStr: string) {
       const customerDoc = nameSnap.docs[0];
       const customerData = { id: customerDoc.id, ...customerDoc.data() } as CustomerDoc;
 
-      const vehQ = query(vehiclesRef, where('customerId', '==', customerDoc.id), limit(1));
+      const vehQ = query(vehiclesRef, where('customerId', '==', customerDoc.id));
       const vehSnap = await getDocs(vehQ);
-      const vehicleData = !vehSnap.empty
-        ? ({ id: vehSnap.docs[0].id, ...vehSnap.docs[0].data() } as VehicleDoc)
-        : null;
+      const vehicles = vehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
 
-      return { customer: customerData, vehicle: vehicleData };
+      return {
+        customer: customerData,
+        vehicles,
+        vehicle: vehicles[0] || null
+      };
     }
 
     return null;
@@ -101,7 +112,7 @@ export async function searchCustomerOrVehicle(queryStr: string) {
 }
 
 // ==============================================================================
-// 1.1 CREATE NEW CUSTOMER WITH VEHICLE (إنشاء ملف زبون جديد مع مركبته)
+// 1.1 CREATE NEW CUSTOMER WITH VEHICLE (أو إضافة سيارة لزبون موجود)
 // ==============================================================================
 export async function createCustomerWithVehicle(data: {
   fullName: string;
@@ -115,15 +126,29 @@ export async function createCustomerWithVehicle(data: {
   preferredFilter?: string;
 }) {
   try {
-    const { fullName, phoneNumber, makeModel, plateNumber, engineSize, modelYear, lastOdometer, preferredOil, preferredFilter } = data;
+    const {
+      fullName,
+      phoneNumber,
+      makeModel,
+      plateNumber,
+      engineSize,
+      modelYear,
+      lastOdometer,
+      preferredOil,
+      preferredFilter
+    } = data;
 
-    // Check if customer with phone already exists
     const custRef = collection(db, 'customers');
-    const existingSnap = await getDocs(query(custRef, where('phoneNumber', '==', phoneNumber.trim()), limit(1)));
-    
+    const existingSnap = await getDocs(
+      query(custRef, where('phoneNumber', '==', phoneNumber.trim()), limit(1))
+    );
+
     let customerId = '';
+    let existingCustomerData: any = null;
+
     if (!existingSnap.empty) {
       customerId = existingSnap.docs[0].id;
+      existingCustomerData = existingSnap.docs[0].data();
     } else {
       const newCust = await addDoc(custRef, {
         fullName: fullName.trim(),
@@ -135,10 +160,8 @@ export async function createCustomerWithVehicle(data: {
       customerId = newCust.id;
     }
 
-    // Generate clean QR code identifier
     const qrCodeId = `${plateNumber.replace(/\s+/g, '-').replace(/[^\w-]/g, '')}-${Date.now().toString().slice(-4)}`;
 
-    // Create Vehicle
     const vehRef = await addDoc(collection(db, 'vehicles'), {
       customerId,
       makeModel: makeModel.trim(),
@@ -146,7 +169,7 @@ export async function createCustomerWithVehicle(data: {
       engineSize: engineSize.trim(),
       modelYear: Number(modelYear) || new Date().getFullYear(),
       lastOdometer: Number(lastOdometer) || 0,
-      nextOdometer: (Number(lastOdometer) || 0) + 7000,
+      nextOdometer: (Number(lastOdometer) || 0) + 3000,
       lastServiceDate: serverTimestamp(),
       preferredOil: preferredOil || '',
       preferredFilter: preferredFilter || '',
@@ -155,10 +178,10 @@ export async function createCustomerWithVehicle(data: {
 
     const createdCustomer: CustomerDoc = {
       id: customerId,
-      fullName: fullName.trim(),
+      fullName: existingCustomerData ? existingCustomerData.fullName : fullName.trim(),
       phoneNumber: phoneNumber.trim(),
-      loyaltyPoints: 0,
-      totalDebt: 0,
+      loyaltyPoints: existingCustomerData ? Number(existingCustomerData.loyaltyPoints || 0) : 0,
+      totalDebt: existingCustomerData ? Number(existingCustomerData.totalDebt || 0) : 0,
       createdAt: new Date().toISOString()
     };
 
@@ -170,17 +193,24 @@ export async function createCustomerWithVehicle(data: {
       engineSize: engineSize.trim(),
       modelYear: Number(modelYear) || new Date().getFullYear(),
       lastOdometer: Number(lastOdometer) || 0,
-      nextOdometer: (Number(lastOdometer) || 0) + 7000,
+      nextOdometer: (Number(lastOdometer) || 0) + 3000,
       lastServiceDate: new Date().toISOString(),
       preferredOil: preferredOil || '',
       preferredFilter: preferredFilter || '',
       qrCodeId
     };
 
+    // Fetch all vehicles for this customer
+    const allVehSnap = await getDocs(
+      query(collection(db, 'vehicles'), where('customerId', '==', customerId))
+    );
+    const allVehicles = allVehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
+
     return {
       success: true,
       customer: createdCustomer,
-      vehicle: createdVehicle
+      vehicle: createdVehicle,
+      vehicles: allVehicles
     };
   } catch (error) {
     console.error('Error in createCustomerWithVehicle:', error);
@@ -189,12 +219,70 @@ export async function createCustomerWithVehicle(data: {
 }
 
 // ==============================================================================
-// 2. RECORD SERVICE VISIT (Atomic Transaction)
-// - Deducts fractional oil liters from products.totalLitersStock
-// - Records service_visits doc
-// - Updates vehicle last/next odometer and lastServiceDate
-// - Increments customer totalDebt if debtAmount > 0
-// - Increments customer loyaltyPoints (+10)
+// 1.2 ADD ADDITIONAL VEHICLE TO EXISTING CUSTOMER (إضافة سيارة ثانية لنفس الزبون)
+// ==============================================================================
+export async function addVehicleToCustomer(data: {
+  customerId: string;
+  makeModel: string;
+  plateNumber: string;
+  engineSize: string;
+  modelYear: number;
+  lastOdometer?: number;
+  preferredOil?: string;
+  preferredFilter?: string;
+}) {
+  try {
+    const {
+      customerId,
+      makeModel,
+      plateNumber,
+      engineSize,
+      modelYear,
+      lastOdometer,
+      preferredOil,
+      preferredFilter
+    } = data;
+
+    const qrCodeId = `${plateNumber.replace(/\s+/g, '-').replace(/[^\w-]/g, '')}-${Date.now().toString().slice(-4)}`;
+
+    const vehRef = await addDoc(collection(db, 'vehicles'), {
+      customerId,
+      makeModel: makeModel.trim(),
+      plateNumber: plateNumber.trim(),
+      engineSize: engineSize.trim(),
+      modelYear: Number(modelYear) || new Date().getFullYear(),
+      lastOdometer: Number(lastOdometer) || 0,
+      nextOdometer: (Number(lastOdometer) || 0) + 3000,
+      lastServiceDate: serverTimestamp(),
+      preferredOil: preferredOil || '',
+      preferredFilter: preferredFilter || '',
+      qrCodeId
+    });
+
+    const newVehicle: VehicleDoc = {
+      id: vehRef.id,
+      customerId,
+      makeModel: makeModel.trim(),
+      plateNumber: plateNumber.trim(),
+      engineSize: engineSize.trim(),
+      modelYear: Number(modelYear) || new Date().getFullYear(),
+      lastOdometer: Number(lastOdometer) || 0,
+      nextOdometer: (Number(lastOdometer) || 0) + 3000,
+      lastServiceDate: new Date().toISOString(),
+      preferredOil: preferredOil || '',
+      preferredFilter: preferredFilter || '',
+      qrCodeId
+    };
+
+    return { success: true, vehicle: newVehicle };
+  } catch (error) {
+    console.error('Error in addVehicleToCustomer:', error);
+    throw error;
+  }
+}
+
+// ==============================================================================
+// 2. RECORD SERVICE VISIT (Atomic Transaction: Deducts Engine Oil + Gear Oil)
 // ==============================================================================
 export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' | 'visitDate'>) {
   const {
@@ -207,6 +295,10 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
     viscosity,
     oilLitersUsed,
     filterCode,
+    gearOilProductId,
+    gearOilName,
+    gearOilViscosity,
+    gearOilLitersUsed,
     gearOilDetails,
     technicalNotes,
     totalPrice,
@@ -215,24 +307,44 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
   } = visitData;
 
   return await runTransaction(db, async (transaction) => {
-    let productRef = null;
-    let currentStock = 0;
+    let oilRef = null;
+    let currentOilStock = 0;
 
-    // 1. Read product stock if oilProductId is provided
+    // 1. Read Engine Oil product stock
     if (oilProductId) {
-      productRef = doc(db, 'products', oilProductId);
-      const productSnap = await transaction.get(productRef);
-
-      if (productSnap.exists()) {
-        const pData = productSnap.data() as any;
-        currentStock = Number(pData?.totalLitersStock || 0);
-        if (currentStock < oilLitersUsed) {
+      oilRef = doc(db, 'products', oilProductId);
+      const oilSnap = await transaction.get(oilRef);
+      if (oilSnap.exists()) {
+        const pData = oilSnap.data() as any;
+        currentOilStock = Number(pData?.totalLitersStock || 0);
+        if (currentOilStock < oilLitersUsed) {
           throw new Error(
-            `رصيد المخزون غير كافٍ. المتاح حالياً (${currentStock} لتر) بينما المطلوب (${oilLitersUsed} لتر).`
+            `رصيد زيت المحرك غير كافٍ. المتاح (${currentOilStock} لتر) بينما المطلوب (${oilLitersUsed} لتر).`
           );
         }
       } else {
-        productRef = null;
+        oilRef = null;
+      }
+    }
+
+    // 1.b Read Gear Oil product stock if selected
+    let gearRef = null;
+    let currentGearStock = 0;
+    const gearLiters = Number(gearOilLitersUsed || 0);
+
+    if (gearOilProductId && gearLiters > 0) {
+      gearRef = doc(db, 'products', gearOilProductId);
+      const gearSnap = await transaction.get(gearRef);
+      if (gearSnap.exists()) {
+        const gData = gearSnap.data() as any;
+        currentGearStock = Number(gData?.totalLitersStock || 0);
+        if (currentGearStock < gearLiters) {
+          throw new Error(
+            `رصيد زيت الجير غير كافٍ. المتاح (${currentGearStock} لتر) بينما المطلوب (${gearLiters} لتر).`
+          );
+        }
+      } else {
+        gearRef = null;
       }
     }
 
@@ -249,11 +361,19 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       throw new Error('ملف المركبة غير موجود');
     }
 
-    // 3. Write: Deduct accurate fractional stock
-    if (productRef) {
-      const newStock = Number((currentStock - oilLitersUsed).toFixed(2));
-      transaction.update(productRef, {
+    // 3. Write: Deduct Engine Oil stock
+    if (oilRef) {
+      const newStock = Number((currentOilStock - oilLitersUsed).toFixed(2));
+      transaction.update(oilRef, {
         totalLitersStock: newStock
+      });
+    }
+
+    // 3.b Write: Deduct Gear Oil stock
+    if (gearRef && gearLiters > 0) {
+      const newGearStock = Number((currentGearStock - gearLiters).toFixed(2));
+      transaction.update(gearRef, {
+        totalLitersStock: newGearStock
       });
     }
 
@@ -270,6 +390,10 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       viscosity: viscosity || '',
       oilLitersUsed,
       filterCode: filterCode || '',
+      gearOilProductId: gearOilProductId || null,
+      gearOilName: gearOilName || '',
+      gearOilViscosity: gearOilViscosity || '',
+      gearOilLitersUsed: gearLiters,
       gearOilDetails: gearOilDetails || '',
       technicalNotes: technicalNotes || '',
       totalPrice,
@@ -286,7 +410,7 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       ...(filterCode ? { preferredFilter: filterCode } : {})
     });
 
-    // 6. Write: Update Customer Debt & Loyalty (+10 points per oil change)
+    // 6. Write: Update Customer Debt & Loyalty (+10 points)
     const customerData = customerSnap.data() as any;
     const currentCustomerDebt = Number(customerData?.totalDebt || 0);
     const currentLoyalty = Number(customerData?.loyaltyPoints || 0);
@@ -304,39 +428,31 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
 }
 
 // ==============================================================================
-// 3. RECORD DIRECT SALE (Atomic Transaction)
-// - Deducts stock for each item in the basket
-// - Records direct_sales doc
-// - Increments debt on customer document if debtAmount > 0 and customerId present
+// 3. RECORD DIRECT SALE
 // ==============================================================================
 export async function recordDirectSale(saleData: Omit<DirectSaleDoc, 'id' | 'saleDate'>) {
   const { customerId, items, totalAmount, paidAmount, debtAmount } = saleData;
 
   return await runTransaction(db, async (transaction) => {
-    // 1. Validate and fetch all products in cart
     const productUpdates: { ref: any; newStock: number }[] = [];
 
     for (const item of items) {
       const pRef = doc(db, 'products', item.productId);
       const pSnap = await transaction.get(pRef);
 
-      if (!pSnap.exists()) {
-        throw new Error(`المنتج (${item.productName}) غير موجود`);
+      if (pSnap.exists()) {
+        const pData = pSnap.data() as any;
+        const available = Number(pData?.totalLitersStock || 0);
+        if (available < item.quantity) {
+          throw new Error(`الكمية غير متوفرة في المخزن للمنتج (${item.productName}). المتاح: ${available}`);
+        }
+        productUpdates.push({
+          ref: pRef,
+          newStock: Number((available - item.quantity).toFixed(2))
+        });
       }
-
-      const pData = pSnap.data() as any;
-      const available = Number(pData?.totalLitersStock || 0);
-      if (available < item.quantity) {
-        throw new Error(`الكمية غير متوفرة في المخزن للمنتج (${item.productName}). المتاح: ${available}`);
-      }
-
-      productUpdates.push({
-        ref: pRef,
-        newStock: Number((available - item.quantity).toFixed(2))
-      });
     }
 
-    // 2. Fetch customer doc if debt is added
     let customerRef = null;
     let customerDebt = 0;
     if (customerId && debtAmount > 0) {
@@ -348,12 +464,10 @@ export async function recordDirectSale(saleData: Omit<DirectSaleDoc, 'id' | 'sal
       }
     }
 
-    // 3. Apply product stock deductions
     for (const update of productUpdates) {
       transaction.update(update.ref, { totalLitersStock: update.newStock });
     }
 
-    // 4. Record direct sale document
     const saleRef = doc(collection(db, 'direct_sales'));
     transaction.set(saleRef, {
       customerId: customerId || null,
@@ -364,7 +478,6 @@ export async function recordDirectSale(saleData: Omit<DirectSaleDoc, 'id' | 'sal
       debtAmount
     });
 
-    // 5. Update customer debt if applicable
     if (customerRef && debtAmount > 0) {
       transaction.update(customerRef, {
         totalDebt: customerDebt + debtAmount
@@ -377,9 +490,6 @@ export async function recordDirectSale(saleData: Omit<DirectSaleDoc, 'id' | 'sal
 
 // ==============================================================================
 // 4. GET CUSTOMER DOSSIER
-// - Customer profile & debt
-// - Registered vehicles
-// - Complete service history ordered by visitDate desc
 // ==============================================================================
 export async function getCustomerDossier(customerId: string) {
   try {
@@ -390,29 +500,24 @@ export async function getCustomerDossier(customerId: string) {
 
     const customer = { id: customerSnap.id, ...customerSnap.data() } as CustomerDoc;
 
-    // Fetch Vehicles
     const vehQuery = query(collection(db, 'vehicles'), where('customerId', '==', customerId));
     const vehSnap = await getDocs(vehQuery);
     const vehicles: VehicleDoc[] = vehSnap.docs.map(
       (d) => ({ id: d.id, ...d.data() } as VehicleDoc)
     );
 
-    // Fetch Service Visits history (ordered by visitDate descending)
     const visitsQuery = query(
       collection(db, 'service_visits'),
-      where('customerId', '==', customerId),
-      orderBy('visitDate', 'desc')
+      where('customerId', '==', customerId)
     );
     const visitsSnap = await getDocs(visitsQuery);
     const history: ServiceVisitDoc[] = visitsSnap.docs.map(
       (d) => ({ id: d.id, ...d.data() } as ServiceVisitDoc)
     );
 
-    // Fetch recent debt payments
     const paymentsQuery = query(
       collection(db, 'debt_payments'),
-      where('customerId', '==', customerId),
-      orderBy('paymentDate', 'desc')
+      where('customerId', '==', customerId)
     );
     const paymentsSnap = await getDocs(paymentsQuery);
     const debtPayments: DebtPaymentDoc[] = paymentsSnap.docs.map(
@@ -432,8 +537,7 @@ export async function getCustomerDossier(customerId: string) {
 }
 
 // ==============================================================================
-// 5. GET VEHICLE BY QR CODE (Windshield Sticker Fast Portal)
-// - Public read query by qrCodeId
+// 5. GET VEHICLE BY QR CODE
 // ==============================================================================
 export async function getVehicleByQrCode(qrCodeId: string) {
   try {
@@ -451,11 +555,9 @@ export async function getVehicleByQrCode(qrCodeId: string) {
     const vehDoc = vehSnap.docs[0];
     const vehicle = { id: vehDoc.id, ...vehDoc.data() } as VehicleDoc;
 
-    // Fetch the latest service visit for this vehicle
     const visitQuery = query(
       collection(db, 'service_visits'),
       where('vehicleId', '==', vehicle.id),
-      orderBy('visitDate', 'desc'),
       limit(1)
     );
     const visitSnap = await getDocs(visitQuery);
@@ -475,7 +577,6 @@ export async function getVehicleByQrCode(qrCodeId: string) {
 
 // ==============================================================================
 // 6. RECORD DEBT PAYMENT
-// - Deducts amountPaid from customer totalDebt and logs entry in debt_payments
 // ==============================================================================
 export async function recordDebtPayment(customerId: string, amountPaid: number, notes?: string) {
   return await runTransaction(db, async (transaction) => {
@@ -507,23 +608,135 @@ export async function recordDebtPayment(customerId: string, amountPaid: number, 
 }
 
 // ==============================================================================
-// 7. GET ALL PRODUCTS
+// 7. GET ALL PRODUCTS (With Dual Pricing, Multi-Sizes, Carton/Piece/Liter info)
 // ==============================================================================
-// Initial catalog used to bootstrap empty Firestore
 const DEFAULT_INITIAL_PRODUCTS: Omit<ProductDoc, 'id'>[] = [
-  { name: 'Mobil 1 ESP 5W-30 (تخليقي بالكامل)', category: 'engine_oil', viscosity: '5W30', packageSizeLiters: 5, totalLitersStock: 50.0, unitCost: 9000, salePrice: 12000 },
-  { name: 'Castrol Magnatec 10W-40', category: 'engine_oil', viscosity: '10W40', packageSizeLiters: 4, totalLitersStock: 40.0, unitCost: 7000, salePrice: 9500 },
-  { name: 'Liqui Moly Molygen 5W-40', category: 'engine_oil', viscosity: '5W40', packageSizeLiters: 5, totalLitersStock: 30.0, unitCost: 10500, salePrice: 13500 },
-  { name: 'Toyota Genuine ATF WS (دهن گير)', category: 'gear_oil', viscosity: 'ATF WS', packageSizeLiters: 4, totalLitersStock: 25.0, unitCost: 11000, salePrice: 15000 },
-  { name: 'فلتر زيت أصلي تويوتا', category: 'filter', viscosity: '90915-YZZE2', packageSizeLiters: 1, totalLitersStock: 30, unitCost: 4500, salePrice: 7000 },
-  { name: 'ماء راديتر بريستون أصلي 50/50 أمريكي', category: 'coolant', viscosity: 'Prestone Red', packageSizeLiters: 4, totalLitersStock: 20.0, unitCost: 10000, salePrice: 14000 }
+  {
+    name: 'زيت يورال الأصلي (Eural Motor Oil)',
+    category: 'engine_oil',
+    availableSizes: ['10W30', '10W40', '20W50', '5W30'],
+    viscosity: '10W40',
+    cartonsCount: 5,
+    piecesPerCarton: 4,
+    packageSizeLiters: 4,
+    totalPiecesStock: 20,
+    totalLitersStock: 80.0,
+    unitCost: 8500,
+    directSalePrice: 11000,
+    serviceSalePrice: 12500,
+    salePrice: 12500
+  },
+  {
+    name: 'Mobil 1 ESP (تخليقي بالكامل)',
+    category: 'engine_oil',
+    availableSizes: ['5W30', '0W20', '5W40'],
+    viscosity: '5W30',
+    cartonsCount: 3,
+    piecesPerCarton: 4,
+    packageSizeLiters: 4,
+    totalPiecesStock: 12,
+    totalLitersStock: 48.0,
+    unitCost: 10000,
+    directSalePrice: 13000,
+    serviceSalePrice: 14500,
+    salePrice: 14500
+  },
+  {
+    name: 'Castrol Magnatec',
+    category: 'engine_oil',
+    availableSizes: ['10W40', '5W30', '20W50'],
+    viscosity: '10W40',
+    cartonsCount: 4,
+    piecesPerCarton: 6,
+    packageSizeLiters: 4,
+    totalPiecesStock: 24,
+    totalLitersStock: 96.0,
+    unitCost: 7500,
+    directSalePrice: 9500,
+    serviceSalePrice: 11000,
+    salePrice: 11000
+  },
+  {
+    name: 'زيت قير تويوتا وهونداي (ATF / CVT)',
+    category: 'gear_oil',
+    availableSizes: ['ATF WS', 'ATF SP-IV', 'CVT FE', '75W90'],
+    viscosity: 'ATF WS',
+    cartonsCount: 2,
+    piecesPerCarton: 6,
+    packageSizeLiters: 4,
+    totalPiecesStock: 12,
+    totalLitersStock: 48.0,
+    unitCost: 11000,
+    directSalePrice: 14000,
+    serviceSalePrice: 16000,
+    salePrice: 16000
+  },
+  {
+    name: 'فلتر زيت أصلي (تويوتا / كيا / هونداي)',
+    category: 'filter',
+    availableSizes: ['90915-YZZE2', '26300-35505', '90915-YZZD4'],
+    viscosity: '90915-YZZE2',
+    cartonsCount: 2,
+    piecesPerCarton: 20,
+    packageSizeLiters: 1,
+    totalPiecesStock: 40,
+    totalLitersStock: 40,
+    unitCost: 4000,
+    directSalePrice: 6000,
+    serviceSalePrice: 7500,
+    salePrice: 7500
+  },
+  {
+    name: 'ماء راديتر بريستون أمريكي 50/50',
+    category: 'coolant',
+    availableSizes: ['أحمر Red', 'أخضر Green'],
+    viscosity: 'أحمر Red',
+    cartonsCount: 3,
+    piecesPerCarton: 6,
+    packageSizeLiters: 4,
+    totalPiecesStock: 18,
+    totalLitersStock: 72.0,
+    unitCost: 10000,
+    directSalePrice: 13500,
+    serviceSalePrice: 15000,
+    salePrice: 15000
+  },
+  {
+    name: 'فلاش غسيل محرك (Engine Flush)',
+    category: 'flush',
+    availableSizes: ['300ml', '500ml'],
+    viscosity: '300ml',
+    cartonsCount: 2,
+    piecesPerCarton: 12,
+    packageSizeLiters: 1,
+    totalPiecesStock: 24,
+    totalLitersStock: 24,
+    unitCost: 5000,
+    directSalePrice: 7500,
+    serviceSalePrice: 9000,
+    salePrice: 9000
+  },
+  {
+    name: 'مانع تبخير وتنقيص زيت (Stop Smoke)',
+    category: 'anti_smoke',
+    availableSizes: ['350ml', '500ml'],
+    viscosity: '350ml',
+    cartonsCount: 2,
+    piecesPerCarton: 12,
+    packageSizeLiters: 1,
+    totalPiecesStock: 24,
+    totalLitersStock: 24,
+    unitCost: 6000,
+    directSalePrice: 9000,
+    serviceSalePrice: 10000,
+    salePrice: 10000
+  }
 ];
 
 export async function getProductsList(): Promise<ProductDoc[]> {
   try {
     const productsSnap = await getDocs(collection(db, 'products'));
     if (productsSnap.empty) {
-      // Auto-populate default products to Firestore on first run
       const seeded: ProductDoc[] = [];
       for (const item of DEFAULT_INITIAL_PRODUCTS) {
         const docRef = await addDoc(collection(db, 'products'), {
@@ -541,9 +754,6 @@ export async function getProductsList(): Promise<ProductDoc[]> {
   }
 }
 
-// ==============================================================================
-// 8. ADD NEW PRODUCT (إضافة منتج جديد للمخزون)
-// ==============================================================================
 export async function addProduct(product: Omit<ProductDoc, 'id'>) {
   try {
     const docRef = await addDoc(collection(db, 'products'), {
@@ -557,9 +767,6 @@ export async function addProduct(product: Omit<ProductDoc, 'id'>) {
   }
 }
 
-// ==============================================================================
-// 9. UPDATE PRODUCT / STOCK (تعديل منتج أو تحديث الرصيد)
-// ==============================================================================
 export async function updateProduct(id: string, updates: Partial<ProductDoc>) {
   try {
     const productRef = doc(db, 'products', id);
@@ -574,12 +781,8 @@ export async function updateProduct(id: string, updates: Partial<ProductDoc>) {
   }
 }
 
-// ==============================================================================
-// 10. DELETE PRODUCT (حذف منتج من المخزون)
-// ==============================================================================
 export async function deleteProduct(id: string) {
   try {
-    const { deleteDoc } = await import('firebase/firestore');
     const productRef = doc(db, 'products', id);
     await deleteDoc(productRef);
     return { success: true };

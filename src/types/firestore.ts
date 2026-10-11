@@ -4,7 +4,7 @@ export interface CustomerDoc {
   phoneNumber: string;
   loyaltyPoints: number;
   totalDebt: number;
-  createdAt: any; // Timestamp or ISO string
+  createdAt: any;
 }
 
 export interface VehicleDoc {
@@ -22,15 +22,43 @@ export interface VehicleDoc {
   qrCodeId: string;
 }
 
+export type ProductCategory = 
+  | 'engine_oil' 
+  | 'gear_oil' 
+  | 'filter' 
+  | 'coolant' 
+  | 'additive' 
+  | 'flush' 
+  | 'anti_smoke';
+
+export const PRODUCT_CATEGORY_LABELS: Record<ProductCategory, string> = {
+  engine_oil: 'زيوت المحركات',
+  gear_oil: 'زيوت الجير (القير)',
+  filter: 'الفلاتر (زيت / هواء / شاصي)',
+  coolant: 'مياه الراديترات والمبردات',
+  additive: 'المحسنات والمعالجات',
+  flush: 'الفلاشات (غسيل محرك)',
+  anti_smoke: 'مانع تبخير وتنقيص'
+};
+
 export interface ProductDoc {
   id?: string;
   name: string;
-  category: 'engine_oil' | 'filter' | 'coolant' | 'gear_oil';
-  viscosity?: string;
-  packageSizeLiters: number;
-  totalLitersStock: number; // Supports fractional liters (e.g. 48.5L)
-  unitCost: number;
-  salePrice: number;
+  category: ProductCategory;
+  // Support multiple sizes/viscosities for a single product (e.g. ["10W30", "10W40", "20W50"])
+  availableSizes?: string[];
+  viscosity?: string; // Primary or default size/code
+  // Carton & Piece & Liter breakdown
+  cartonsCount?: number;
+  piecesPerCarton?: number;
+  packageSizeLiters: number; // Liters per piece/bottle
+  totalPiecesStock?: number; // Total bottles/pieces
+  totalLitersStock: number;  // Total liters across all cartons/bottles
+  // Dual Pricing
+  unitCost: number;          // سعر الشراء / التكلفة
+  directSalePrice: number;   // سعر البيع المباشر (فقط بدون خدمة)
+  serviceSalePrice: number;  // سعر البيع مع التبديل والخدمة
+  salePrice: number;         // Backward compatible default price
 }
 
 export interface ServiceVisitDoc {
@@ -40,12 +68,20 @@ export interface ServiceVisitDoc {
   visitDate: any;
   currentOdometer: number;
   nextOdometer: number;
+  // Engine Oil
   oilProductId?: string;
   oilName: string;
   viscosity?: string;
-  oilLitersUsed: number; // Fractional liters deducted (e.g., 3.5L or 4.4L)
+  oilLitersUsed: number;
+  // Filter
   filterCode?: string;
+  // Gear Oil (ATF / CVT / Manual)
+  gearOilProductId?: string;
+  gearOilName?: string;
+  gearOilViscosity?: string;
+  gearOilLitersUsed?: number;
   gearOilDetails?: string;
+  // Notes & Financials
   technicalNotes?: string;
   totalPrice: number;
   paidAmount: number;
@@ -55,6 +91,7 @@ export interface ServiceVisitDoc {
 export interface DirectSaleItem {
   productId: string;
   productName: string;
+  selectedSize?: string;
   quantity: number;
   unitPrice: number;
 }

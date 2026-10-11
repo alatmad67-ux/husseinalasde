@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import { AuthProvider } from '@/context/AuthContext';
 
 export const metadata: Metadata = {
   title: 'مركز حسين الاسدي | نظام خدمات وتبديل الزيوت',
@@ -11,14 +12,12 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0f172a',
+  themeColor: '#ffffff',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
 };
-
-import { AuthProvider } from '@/context/AuthContext';
 
 export default function RootLayout({
   children,
@@ -35,7 +34,7 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="min-h-screen bg-industrial-950 text-slate-100 flex flex-col antialiased selection:bg-brand-amber selection:text-black">
+      <body className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-amber-500 selection:text-white">
         <AuthProvider>
           {children}
         </AuthProvider>
