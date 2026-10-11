@@ -1,23 +1,29 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Car, 
-  Gauge, 
-  Phone, 
-  MapPin, 
-  ShieldCheck, 
+import {
+  Car,
+  Gauge,
+  Phone,
+  MapPin,
+  ShieldCheck,
   MessageCircle,
   Calendar,
   Navigation,
   ExternalLink,
   X,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Droplets,
+  Wrench,
+  History,
+  User,
+  Copy,
+  Check
 } from 'lucide-react';
 import IraqiPlateBadge from '@/components/IraqiPlateBadge';
 import { getVehicleByQrCode, formatExactDateTime } from '@/services/firestoreService';
-import { VehicleDoc, ServiceVisitDoc } from '@/types/firestore';
+import { VehicleDoc, ServiceVisitDoc, CustomerDoc } from '@/types/firestore';
 
 const WORKSHOP_GOOGLE_MAPS_URL = 'https://maps.app.goo.gl/Hfe2TZ3x96CTq8pH8';
 
@@ -26,11 +32,14 @@ export default function VehiclePublicStatusPage({
 }: {
   params: { token: string };
 }) {
-  const qrCodeId = params.token;
+  const qrCodeId = decodeURIComponent(params.token || '');
   const [vehicle, setVehicle] = useState<VehicleDoc | null>(null);
+  const [customer, setCustomer] = useState<CustomerDoc | null>(null);
   const [lastVisit, setLastVisit] = useState<ServiceVisitDoc | null>(null);
+  const [history, setHistory] = useState<ServiceVisitDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [mapPickerOpen, setMapPickerOpen] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -39,7 +48,9 @@ export default function VehiclePublicStatusPage({
         const data = await getVehicleByQrCode(qrCodeId);
         if (data) {
           setVehicle(data.vehicle);
+          setCustomer(data.customer || null);
           setLastVisit(data.lastVisit);
+          setHistory(data.history || []);
         }
       } catch (err) {
         console.error('Error fetching vehicle by QR code in Firestore:', err);
@@ -50,10 +61,21 @@ export default function VehiclePublicStatusPage({
     load();
   }, [qrCodeId]);
 
+  const handleCopyPageLink = async () => {
+    if (typeof window === 'undefined') return;
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2500);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950 flex flex-col items-center justify-start p-4 py-8 antialiased">
       <div className="max-w-md w-full space-y-5">
-        
+
         {/* Workshop Header Card with Official Logo */}
         <div className="text-center space-y-2.5">
           <div className="inline-flex items-center justify-center w-24 h-24 rounded-3xl overflow-hidden border-2 border-amber-500 bg-slate-950 shadow-xl shadow-amber-500/25">
@@ -65,7 +87,7 @@ export default function VehiclePublicStatusPage({
           </div>
           <h1 className="text-2xl sm:text-3xl font-black tracking-wide text-slate-950">مركز حسين الأسدي</h1>
           <p className="text-sm text-amber-800 font-black">
-            بطاقة الفحص ومتابعة تبديل الزيت الإلكترونية
+            البطاقة الإلكترونية لمتابعة تبديل الزيت والعداد
           </p>
         </div>
 
@@ -79,16 +101,26 @@ export default function VehiclePublicStatusPage({
             <AlertCircle className="w-10 h-10 text-amber-600 mx-auto" />
             <h2 className="text-lg font-black text-slate-950">لم يتم العثور على بيانات هذه البطاقة</h2>
             <p className="text-sm font-bold text-slate-600">
-              يرجى مراجعة مركز حسين الأسدي لتحديث ملصق الـ QR الخاص بسيارتك.
+              يرجى مراجعة مركز حسين الأسدي لتحديث الرابط أو رمز الـ QR الخاص بسيارتك.
             </p>
           </div>
         ) : (
           <>
-            {/* Vehicle Identity Badge */}
-            <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-lg relative overflow-hidden">
+            {/* Vehicle & Customer Identity Badge */}
+            <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-lg relative overflow-hidden space-y-4">
               <div className="absolute top-0 right-0 left-0 h-2 bg-gradient-to-r from-amber-500 via-emerald-500 to-amber-500"></div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-slate-100 pb-4 mb-4 pt-1">
+              {customer && (
+                <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 mt-1">
+                  <span className="text-xs font-black text-slate-500 flex items-center gap-1.5">
+                    <User className="w-4 h-4 text-amber-600" />
+                    اسم الزبون:
+                  </span>
+                  <span className="text-base font-black text-slate-950">{customer.fullName}</span>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-slate-100 pb-4">
                 <div className="flex items-center gap-3">
                   <div className="p-3 rounded-2xl bg-amber-50 text-amber-600 border-2 border-amber-200">
                     <Car className="w-7 h-7" />
@@ -103,62 +135,132 @@ export default function VehiclePublicStatusPage({
                 <IraqiPlateBadge plateNumber={vehicle.plateNumber} size="md" />
               </div>
 
-              {/* Critical Next Due Service Display */}
-              <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 text-center space-y-1.5">
-                <span className="text-sm text-amber-950 font-black block">
-                  موعد الاستحقاق القادم لتبديل الزيت
-                </span>
-                <div className="text-3xl sm:text-4xl font-black font-mono text-amber-600">
-                  {vehicle.nextOdometer?.toLocaleString()} <span className="text-base font-sans font-black text-slate-800">كم</span>
+              {/* Current Odometer & Next Odometer Side-by-Side */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-100 border-2 border-slate-300 rounded-2xl p-3.5 text-center space-y-1">
+                  <span className="text-xs font-black text-slate-600 flex items-center justify-center gap-1">
+                    <Gauge className="w-4 h-4 text-slate-700" />
+                    العداد الحالي (آخر تبديل)
+                  </span>
+                  <div className="text-2xl font-black font-mono text-slate-950">
+                    {(lastVisit?.currentOdometer || vehicle.lastOdometer || 0).toLocaleString()}
+                    <span className="text-xs font-sans mr-1">كم</span>
+                  </div>
                 </div>
-                <p className="text-sm text-emerald-800 font-black">
-                  العيار الموصى به: {lastVisit?.viscosity || vehicle.preferredOil || 'قياسي'}
-                  {vehicle.recommendedLiters ? ` (${vehicle.recommendedLiters} لتر)` : ''}
-                </p>
+
+                <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-3.5 text-center space-y-1 shadow-sm">
+                  <span className="text-xs font-black text-amber-950 flex items-center justify-center gap-1">
+                    <Gauge className="w-4 h-4 text-amber-600" />
+                    موعد التبديل القادم
+                  </span>
+                  <div className="text-2xl font-black font-mono text-amber-700">
+                    {(lastVisit?.nextOdometer || vehicle.nextOdometer || 0).toLocaleString()}
+                    <span className="text-xs font-sans mr-1">كم</span>
+                  </div>
+                </div>
               </div>
 
-              {/* Last Service Details */}
-              <div className="mt-4 space-y-3 text-sm text-slate-800">
-                {lastVisit?.visitDate && (
-                  <div className="flex justify-between py-2 border-b border-slate-100">
-                    <span className="text-slate-600 flex items-center gap-1.5 font-black">
-                      <Calendar className="w-4 h-4 text-amber-600" /> تاريخ آخر تبديل:
-                    </span>
-                    <span className="font-mono font-black text-slate-950" dir="ltr">
+              {/* Last Operation Details Box (شنو سوه بآخر عملية) */}
+              <div className="bg-emerald-50/70 border-2 border-emerald-300 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
+                  <h3 className="text-sm font-black text-emerald-950 flex items-center gap-1.5">
+                    <Wrench className="w-4 h-4 text-emerald-700" />
+                    <span>تفاصيل آخر عملية تبديل وما تم عمله</span>
+                  </h3>
+                  {lastVisit?.visitDate && (
+                    <span className="text-xs font-mono font-black text-emerald-900 bg-white px-2.5 py-1 rounded-lg border border-emerald-200" dir="ltr">
                       {formatExactDateTime(lastVisit.visitDate)}
                     </span>
-                  </div>
-                )}
-
-                <div className="flex justify-between py-2 border-b border-slate-100">
-                  <span className="text-slate-600 flex items-center gap-1.5 font-black">
-                    <Gauge className="w-4 h-4 text-amber-600" /> عداد آخر تبديل:
-                  </span>
-                  <span className="font-mono font-black text-slate-950">{vehicle.lastOdometer?.toLocaleString()} كم</span>
+                  )}
                 </div>
 
-                {lastVisit && (
-                  <>
-                    <div className="flex justify-between py-2 border-b border-slate-100">
-                      <span className="text-slate-600 font-black">زيت المحرك المسجل:</span>
-                      <span className="font-black text-slate-950">{lastVisit.oilName} ({lastVisit.viscosity}) - {lastVisit.oilLitersUsed} لتر</span>
+                {lastVisit ? (
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-emerald-200">
+                      <span className="text-slate-600 font-black flex items-center gap-1.5">
+                        <Droplets className="w-4 h-4 text-amber-600" />
+                        زيت المحرك واللتر:
+                      </span>
+                      <span className="font-black text-slate-950">
+                        {lastVisit.oilName} {lastVisit.viscosity ? `(${lastVisit.viscosity})` : ''} — {lastVisit.oilLitersUsed} لتر
+                      </span>
                     </div>
-                    <div className="flex justify-between py-2 border-b border-slate-100">
+
+                    <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-emerald-200">
                       <span className="text-slate-600 font-black">فلتر الزيت:</span>
-                      <span className="font-black text-slate-950">{lastVisit.filterCode || '—'}</span>
+                      <span className="font-black text-slate-950">
+                        {lastVisit.filterCode || 'لم يتم تبديل فلتر'}
+                      </span>
                     </div>
-                    {lastVisit.gearOilName && (
-                      <div className="flex justify-between py-2 border-b border-slate-100">
+
+                    {(lastVisit.gearOilName || lastVisit.gearOilDetails) && (
+                      <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-amber-200">
                         <span className="text-slate-600 font-black">زيت الكير:</span>
-                        <span className="font-black text-amber-800">
-                          {lastVisit.gearOilName} ({lastVisit.gearOilViscosity}) - {lastVisit.gearOilLitersUsed || 1} لتر
+                        <span className="font-black text-amber-900">
+                          {lastVisit.gearOilName || lastVisit.gearOilDetails}
+                          {lastVisit.gearOilViscosity ? ` (${lastVisit.gearOilViscosity})` : ''}
+                          {lastVisit.gearOilLitersUsed ? ` — ${lastVisit.gearOilLitersUsed} لتر` : ''}
                         </span>
                       </div>
                     )}
-                  </>
+
+                    {lastVisit.technicalNotes && (
+                      <div className="bg-amber-50 p-3 rounded-xl border border-amber-300 text-xs font-black text-amber-950">
+                        🔧 ملاحظات الفحص والعمل المنجز: {lastVisit.technicalNotes}
+                      </div>
+                    )}
+
+                    <div className="flex justify-between items-center pt-2 border-t border-emerald-200 text-xs font-black">
+                      <span className="text-slate-700">قيمة الفاتورة: {Number(lastVisit.totalPrice || 0).toLocaleString()} د.ع</span>
+                      <span className="text-emerald-800">الواصل: {Number(lastVisit.paidAmount || 0).toLocaleString()} د.ع</span>
+                      {Number(lastVisit.debtAmount || 0) > 0 && (
+                        <span className="text-red-600">المتبقي: {Number(lastVisit.debtAmount).toLocaleString()} د.ع</span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs font-bold text-slate-600 py-2 space-y-1">
+                    <p>العيار الموصى به للسيارة: <strong className="text-slate-950">{vehicle.preferredOilName || ''} {vehicle.preferredOil || 'قياسي'}</strong></p>
+                    {vehicle.recommendedLiters && <p>كمية الزيت الموصى بها: <strong className="text-slate-950">{vehicle.recommendedLiters} لتر</strong></p>}
+                    {vehicle.preferredFilter && <p>نوع الفلتر: <strong className="text-slate-950">{vehicle.preferredFilter}</strong></p>}
+                  </div>
                 )}
               </div>
+
+              {/* Copy Link Button for Customer */}
+              <button
+                type="button"
+                onClick={handleCopyPageLink}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl font-black text-xs text-slate-800 flex items-center justify-center gap-2 transition"
+              >
+                {copiedLink ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4 text-slate-600" />}
+                <span>{copiedLink ? 'تم نسخ رابط البطاقة بنجاح!' : 'نسخ رابط هذه البطاقة للاحتفاظ به'}</span>
+              </button>
             </div>
+
+            {/* Previous Operations History (إذا كان هناك أكثر من زيارة سابقة) */}
+            {history.length > 1 && (
+              <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-md space-y-3">
+                <h3 className="text-sm font-black text-slate-950 flex items-center gap-2">
+                  <History className="w-5 h-5 text-amber-600" />
+                  <span>سجل عمليات التبديل السابقة ({history.length})</span>
+                </h3>
+                <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+                  {history.slice(1).map((v, idx) => (
+                    <div key={v.id || idx} className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs space-y-1">
+                      <div className="flex justify-between items-center font-black text-slate-900">
+                        <span>{v.oilName} ({v.viscosity}) — {v.oilLitersUsed} لتر</span>
+                        <span className="font-mono text-[11px] text-slate-600" dir="ltr">{formatExactDateTime(v.visitDate)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600 font-bold">
+                        <span>العداد وقتها: {v.currentOdometer?.toLocaleString()} كم</span>
+                        <span>الفلتر: {v.filterCode || '—'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
 

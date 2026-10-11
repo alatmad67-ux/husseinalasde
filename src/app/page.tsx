@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import HeaderNav from '@/components/HeaderNav';
 import IraqiPlateBadge from '@/components/IraqiPlateBadge';
 import ReceiptModal, { ReceiptData } from '@/components/ReceiptModal';
+import QrShareModal from '@/components/QrShareModal';
 import { 
   searchCustomerOrVehicle, 
   recordServiceVisit,
@@ -33,7 +34,9 @@ import {
   Droplet,
   Calendar,
   History,
-  Info
+  Info,
+  QrCode,
+  BellRing
 } from 'lucide-react';
 
 export default function WorkshopPOSPage() {
@@ -84,8 +87,16 @@ export default function WorkshopPOSPage() {
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Receipt Modal State
+  // Receipt Modal State & QR Share Modal State
   const [receiptModalData, setReceiptModalData] = useState<ReceiptData | null>(null);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [loyaltyEnabled, setLoyaltyEnabled] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setLoyaltyEnabled(localStorage.getItem('asadi_loyalty_enabled') === 'true');
+    }
+  }, []);
 
   // Modals: New Customer + Car OR Add Car to Current Customer
   const [newCustomerModalOpen, setNewCustomerModalOpen] = useState(false);
@@ -691,9 +702,20 @@ export default function WorkshopPOSPage() {
                       {customer.totalDebt.toLocaleString()} د.ع
                     </span>
                   </div>
-                  <div className="text-xs font-black text-emerald-700 flex items-center gap-1 mt-2">
-                    <Sparkles className="w-4 h-4" /> نقاط الولاء: {customer.loyaltyPoints}
-                  </div>
+                  {loyaltyEnabled ? (
+                    <div className="text-xs font-black text-emerald-700 flex items-center gap-1 mt-2">
+                      <Sparkles className="w-4 h-4" /> نقاط الولاء: {customer.loyaltyPoints}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setQrModalOpen(true)}
+                      className="mt-2 py-1.5 px-2.5 bg-amber-100 hover:bg-amber-200 text-amber-950 rounded-xl text-xs font-black flex items-center justify-center gap-1 transition"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>رابط / QR البطاقة للزبون</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1239,11 +1261,11 @@ export default function WorkshopPOSPage() {
                 {vehicle?.qrCodeId && (
                   <button
                     type="button"
-                    onClick={() => window.open(`/public/vehicle/${vehicle.qrCodeId}`, '_blank')}
-                    className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black rounded-2xl flex items-center justify-center gap-2 transition text-sm border-2 border-slate-300"
+                    onClick={() => setQrModalOpen(true)}
+                    className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-2xl flex items-center justify-center gap-2 transition text-sm shadow-sm"
                   >
-                    <FileText className="w-4 h-4 text-amber-600" />
-                    <span>فتح وطباعة ملصق الزجاج (QR Sticker)</span>
+                    <QrCode className="w-4 h-4 text-amber-400" />
+                    <span>مشاركة رابط / QR البطاقة لواتساب الزبون</span>
                   </button>
                 )}
               </div>
@@ -1259,6 +1281,15 @@ export default function WorkshopPOSPage() {
       <ReceiptModal
         data={receiptModalData}
         onClose={() => setReceiptModalData(null)}
+      />
+
+      {/* Digital Customer Card Link & QR Code Share Modal */}
+      <QrShareModal
+        isOpen={qrModalOpen}
+        onClose={() => setQrModalOpen(false)}
+        vehicle={vehicle}
+        customer={customer}
+        lastVisit={lastVisit}
       />
 
       {/* Modal 1: Register New Customer + First Car (with optional Oil Liters, Oil Type/Size, Filter) */}

@@ -122,3 +122,12 @@ export interface DebtPaymentDoc {
   amountPaid: number;
   notes?: string;
 }
+
+export interface ExpenseDoc {
+  id?: string;
+  title: string;
+  category: string;
+  amount: number;
+  expenseDate: any;
+  notes?: string;
+}

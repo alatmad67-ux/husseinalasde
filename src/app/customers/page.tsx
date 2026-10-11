@@ -2,16 +2,26 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import * as XLSX from 'xlsx';
 import HeaderNav from '@/components/HeaderNav';
 import IraqiPlateBadge from '@/components/IraqiPlateBadge';
 import ReceiptModal, { ReceiptData } from '@/components/ReceiptModal';
-import { 
+import QrShareModal from '@/components/QrShareModal';
+import {
   searchCustomerOrVehicle,
-  getCustomerDossier, 
+  getCustomerDossier,
   recordDebtPayment,
   addVehicleToCustomer,
   getAllDebtorsSummary,
-  formatExactDateTime
+  formatExactDateTime,
+  updateCustomer,
+  deleteCustomer,
+  updateVehicle,
+  deleteVehicle,
+  updateServiceVisit,
+  deleteServiceVisit,
+  bulkImportCustomersFromExcel,
+  ExcelImportRow
 } from '@/services/firestoreService';
 import {
   CustomerDoc,
@@ -20,12 +30,12 @@ import {
   DirectSaleDoc,
   DebtPaymentDoc
 } from '@/types/firestore';
-import { 
-  Users, 
-  Search, 
-  DollarSign, 
-  MessageSquare, 
-  Calendar, 
+import {
+  Users,
+  Search,
+  DollarSign,
+  MessageSquare,
+  Calendar,
   CreditCard,
   History,
   Loader2,
@@ -39,7 +49,15 @@ import {
   ArrowRight,
   Wrench,
   ShoppingCart,
-  Receipt
+  Receipt,
+  FileSpreadsheet,
+  Upload,
+  Download,
+  QrCode,
+  Edit,
+  Trash2,
+  Gift,
+  Power
 } from 'lucide-react';
 
 export default function CustomerDossierPage() {
@@ -50,6 +68,24 @@ export default function CustomerDossierPage() {
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Loyalty Rewards System Toggle (Default: OFF / Inactive until enabled by Admin)
+  const [loyaltyEnabled, setLoyaltyEnabled] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('asadi_loyalty_enabled');
+      setLoyaltyEnabled(saved === 'true');
+    }
+  }, []);
+
+  const toggleLoyaltySystem = () => {
+    const nextVal = !loyaltyEnabled;
+    setLoyaltyEnabled(nextVal);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('asadi_loyalty_enabled', nextVal ? 'true' : 'false');
+    }
+  };
 
   // Selected Customer Dossier State
   const [customer, setCustomer] = useState<CustomerDoc | null>(null);
@@ -71,6 +107,17 @@ export default function CustomerDossierPage() {
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
 
+  // QR & Digital Link Share Modal
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [qrModalVehicle, setQrModalVehicle] = useState<VehicleDoc | null>(null);
+  const [qrModalCustomer, setQrModalCustomer] = useState<CustomerDoc | null>(null);
+  const [qrModalVisit, setQrModalVisit] = useState<ServiceVisitDoc | null>(null);
+
+  // Excel Import Modal State
+  const [excelImportModal, setExcelImportModal] = useState(false);
+  const [parsedExcelRows, setParsedExcelRows] = useState<ExcelImportRow[]>([]);
+  const [importingExcel, setImportingExcel] = useState(false);
+
   // Modal to add car from dossier
   const [addCarModal, setAddCarModal] = useState(false);
   const [newCarForm, setNewCarForm] = useState({
@@ -83,6 +130,44 @@ export default function CustomerDossierPage() {
     preferredOilName: '',
     preferredOil: '',
     preferredFilter: ''
+  });
+
+  // Edit Customer Modal
+  const [editCustomerModal, setEditCustomerModal] = useState(false);
+  const [editCustForm, setEditCustForm] = useState({
+    fullName: '',
+    phoneNumber: '',
+    totalDebt: 0
+  });
+
+  // Edit Vehicle Modal
+  const [editingVehicle, setEditingVehicle] = useState<VehicleDoc | null>(null);
+  const [editVehForm, setEditVehForm] = useState({
+    makeModel: '',
+    plateNumber: '',
+    engineSize: '',
+    modelYear: 2024,
+    lastOdometer: 0,
+    nextOdometer: 3000,
+    recommendedLiters: '',
+    preferredOilName: '',
+    preferredOil: '',
+    preferredFilter: ''
+  });
+
+  // Edit Service Visit Modal
+  const [editingVisit, setEditingVisit] = useState<ServiceVisitDoc | null>(null);
+  const [editVisitForm, setEditVisitForm] = useState({
+    currentOdometer: 0,
+    nextOdometer: 0,
+    oilName: '',
+    viscosity: '',
+    oilLitersUsed: 4,
+    filterCode: '',
+    technicalNotes: '',
+    totalPrice: 0,
+    paidAmount: 0,
+    debtAmount: 0
   });
 
   const loadCustomersDirectory = async () => {
@@ -147,7 +232,6 @@ export default function CustomerDossierPage() {
     e.preventDefault();
     if (!searchPhone.trim()) return;
 
-    // If there is an exact/first match in our loaded directory, open it directly
     if (filteredDirectoryCustomers.length === 1 && filteredDirectoryCustomers[0].id) {
       await selectCustomerById(filteredDirectoryCustomers[0].id);
       return;
@@ -171,6 +255,150 @@ export default function CustomerDossierPage() {
     }
   };
 
+  // ============================================================================
+  // EXCEL EXPORT & IMPORT HANDLERS
+  // ============================================================================
+  const handleExportCustomersExcel = () => {
+    const exportRows = allCustomers.map((c, index) => {
+      const cars = vehiclesByCustomer[c.id || ''] || [];
+      const primaryCar = cars[0];
+      return {
+        'ت': index + 1,
+        'اسم الزبون': c.fullName,
+        'رقم الهاتف': c.phoneNumber,
+        'مبلغ الدين (د.ع)': Number(c.totalDebt || 0),
+        'نوع السيارة': primaryCar?.makeModel || '',
+        'رقم اللوحة': primaryCar?.plateNumber || '',
+        'موديل السنة': primaryCar?.modelYear || '',
+        'العداد الحالي (كم)': primaryCar?.lastOdometer || 0,
+        'العداد القادم (كم)': primaryCar?.nextOdometer || 0,
+        'نوع الزيت': primaryCar?.preferredOilName || '',
+        'سايز الزيت': primaryCar?.preferredOil || '',
+        'كمية الزيت (لتر)': primaryCar?.recommendedLiters || '',
+        'نوع الفلتر': primaryCar?.preferredFilter || '',
+        'عدد الزيارات': visitsCountByCustomer[c.id || ''] || 0
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(exportRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'الزبائن والديون');
+    XLSX.writeFile(wb, `سجل_زبائن_وديون_مركز_حسين_الاسدي_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
+  const handleDownloadExcelTemplate = () => {
+    const sampleRows = [
+      {
+        'اسم الزبون': 'أحمد محمد العلي',
+        'رقم الهاتف': '07701234567',
+        'مبلغ الدين': 0,
+        'نوع السيارة': 'تويوتا كامري',
+        'رقم اللوحة': '11 A 12345',
+        'موديل السنة': 2022,
+        'العداد الحالي': 45000,
+        'نوع الزيت': 'يورال',
+        'سايز الزيت': '5W30',
+        'كمية الزيت': 4.5,
+        'نوع الفلتر': 'أصلي'
+      }
+    ];
+    const ws = XLSX.utils.json_to_sheet(sampleRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'قالب_استيراد_الزبائن');
+    XLSX.writeFile(wb, 'قالب_استيراد_زبائن_مركز_حسين_الاسدي.xlsx');
+  };
+
+  const handleExcelFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const rawJson: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+        const mapped: ExcelImportRow[] = rawJson
+          .map((r) => {
+            // Flexible column matching for Arabic & English headers
+            const getVal = (keys: string[]) => {
+              for (const k of Object.keys(r)) {
+                const cleanK = k.trim().toLowerCase();
+                if (keys.some((target) => cleanK.includes(target.toLowerCase()))) {
+                  return r[k];
+                }
+              }
+              return '';
+            };
+
+            const fullName = String(
+              getVal(['اسم', 'الزبون', 'العميل', 'name', 'customer']) || Object.values(r)[0] || ''
+            ).trim();
+            const phoneNumber = String(
+              getVal(['هاتف', 'تلفون', 'موبايل', 'رقم الهاتف', 'phone', 'mobile']) || Object.values(r)[1] || ''
+            ).trim();
+            const debtVal = Number(
+              String(getVal(['دين', 'ديون', 'متبقي', 'مبلغ الدين', 'debt', 'balance']) || 0).replace(/[^\d.]/g, '')
+            );
+            const makeModel = String(getVal(['سيارة', 'السيارة', 'نوع السيارة', 'مركبة', 'car', 'vehicle', 'model']) || '').trim();
+            const plateNumber = String(getVal(['لوحة', 'رقم اللوحة', 'رقم السيارة', 'plate']) || '').trim();
+            const lastOdometer = Number(
+              String(getVal(['عداد', 'العداد الحالي', 'كيلومتر', 'odometer']) || 0).replace(/[^\d.]/g, '')
+            );
+            const preferredOilName = String(getVal(['نوع الزيت', 'اسم الزيت', 'الزيت', 'oil']) || '').trim();
+            const preferredOil = String(getVal(['سايز', 'لزوجة', 'عيار', 'viscosity', 'size']) || '').trim();
+            const recommendedLiters = Number(
+              String(getVal(['لتر', 'كمية الزيت', 'اللترات', 'liters']) || 0).replace(/[^\d.]/g, '')
+            );
+            const preferredFilter = String(getVal(['فلتر', 'نوع الفلتر', 'filter']) || '').trim();
+
+            return {
+              fullName,
+              phoneNumber,
+              totalDebt: isNaN(debtVal) ? 0 : debtVal,
+              makeModel,
+              plateNumber,
+              lastOdometer: isNaN(lastOdometer) ? 0 : lastOdometer,
+              preferredOilName,
+              preferredOil,
+              recommendedLiters: isNaN(recommendedLiters) || recommendedLiters <= 0 ? undefined : recommendedLiters,
+              preferredFilter
+            };
+          })
+          .filter((item) => item.fullName || item.phoneNumber);
+
+        setParsedExcelRows(mapped);
+      } catch (err) {
+        alert('تعذر قراءة ملف الإكسل. يرجى التأكد من أن الملف بصيغة Excel أو CSV صحيحة.');
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const handleConfirmExcelImport = async () => {
+    if (parsedExcelRows.length === 0) return;
+    setImportingExcel(true);
+    try {
+      const res = await bulkImportCustomersFromExcel(parsedExcelRows);
+      alert(
+        `تم الاستيراد بنجاح!\n- زبائن جدد: ${res.importedCustomers}\n- سيارات مضافة: ${res.importedVehicles}`
+      );
+      setExcelImportModal(false);
+      setParsedExcelRows([]);
+      await loadCustomersDirectory();
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء رفع البيانات إلى قاعدة البيانات.');
+    } finally {
+      setImportingExcel(false);
+    }
+  };
+
+  // ============================================================================
+  // ADD / EDIT / DELETE HANDLERS
+  // ============================================================================
   const handleAddCar = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customer?.id) return;
@@ -196,11 +424,182 @@ export default function CustomerDossierPage() {
     }
   };
 
+  const openEditCustomer = () => {
+    if (!customer) return;
+    setEditCustForm({
+      fullName: customer.fullName,
+      phoneNumber: customer.phoneNumber,
+      totalDebt: Number(customer.totalDebt || 0)
+    });
+    setEditCustomerModal(true);
+  };
+
+  const handleSaveEditCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customer?.id) return;
+    try {
+      await updateCustomer(customer.id, {
+        fullName: editCustForm.fullName.trim(),
+        phoneNumber: editCustForm.phoneNumber.trim(),
+        totalDebt: Number(editCustForm.totalDebt || 0)
+      });
+      setCustomer({
+        ...customer,
+        fullName: editCustForm.fullName.trim(),
+        phoneNumber: editCustForm.phoneNumber.trim(),
+        totalDebt: Number(editCustForm.totalDebt || 0)
+      });
+      setEditCustomerModal(false);
+      await loadCustomersDirectory();
+    } catch (err: any) {
+      alert(err.message || 'خطأ أثناء تعديل بيانات الزبون');
+    }
+  };
+
+  const handleDeleteCustomer = async () => {
+    if (!customer?.id) return;
+    if (!window.confirm(`هل أنت متأكد من حذف الزبون (${customer.fullName}) وسياراته نهائياً؟`)) return;
+    try {
+      await deleteCustomer(customer.id);
+      setCustomer(null);
+      await loadCustomersDirectory();
+    } catch (err: any) {
+      alert(err.message || 'خطأ أثناء حذف الزبون');
+    }
+  };
+
+  const openEditVehicleModal = (v: VehicleDoc) => {
+    setEditingVehicle(v);
+    setEditVehForm({
+      makeModel: v.makeModel || '',
+      plateNumber: v.plateNumber || '',
+      engineSize: v.engineSize || '',
+      modelYear: Number(v.modelYear || 2024),
+      lastOdometer: Number(v.lastOdometer || 0),
+      nextOdometer: Number(v.nextOdometer || 3000),
+      recommendedLiters: v.recommendedLiters ? String(v.recommendedLiters) : '',
+      preferredOilName: v.preferredOilName || '',
+      preferredOil: v.preferredOil || '',
+      preferredFilter: v.preferredFilter || ''
+    });
+  };
+
+  const handleSaveEditVehicle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingVehicle?.id) return;
+    try {
+      const updates: Partial<VehicleDoc> = {
+        makeModel: editVehForm.makeModel.trim(),
+        plateNumber: editVehForm.plateNumber.trim(),
+        engineSize: editVehForm.engineSize.trim(),
+        modelYear: Number(editVehForm.modelYear),
+        lastOdometer: Number(editVehForm.lastOdometer),
+        nextOdometer: Number(editVehForm.nextOdometer),
+        recommendedLiters: editVehForm.recommendedLiters ? Number(editVehForm.recommendedLiters) : undefined,
+        preferredOilName: editVehForm.preferredOilName.trim(),
+        preferredOil: editVehForm.preferredOil.trim(),
+        preferredFilter: editVehForm.preferredFilter.trim()
+      };
+      await updateVehicle(editingVehicle.id, updates);
+      setVehicles(prev => prev.map(v => (v.id === editingVehicle.id ? { ...v, ...updates } : v)));
+      setEditingVehicle(null);
+      await loadCustomersDirectory();
+    } catch (err: any) {
+      alert(err.message || 'خطأ أثناء تحديث بيانات السيارة');
+    }
+  };
+
+  const handleDeleteVehicle = async (vehicleId: string, makeModel: string) => {
+    if (!window.confirm(`هل أنت متأكد من حذف السيارة (${makeModel})؟`)) return;
+    try {
+      await deleteVehicle(vehicleId);
+      setVehicles(prev => prev.filter(v => v.id !== vehicleId));
+      await loadCustomersDirectory();
+    } catch (err: any) {
+      alert(err.message || 'خطأ أثناء حذف السيارة');
+    }
+  };
+
+  const openEditVisitModal = (visit: ServiceVisitDoc) => {
+    setEditingVisit(visit);
+    setEditVisitForm({
+      currentOdometer: Number(visit.currentOdometer || 0),
+      nextOdometer: Number(visit.nextOdometer || 0),
+      oilName: visit.oilName || '',
+      viscosity: visit.viscosity || '',
+      oilLitersUsed: Number(visit.oilLitersUsed || 4),
+      filterCode: visit.filterCode || '',
+      technicalNotes: visit.technicalNotes || '',
+      totalPrice: Number(visit.totalPrice || 0),
+      paidAmount: Number(visit.paidAmount || 0),
+      debtAmount: Number(visit.debtAmount || 0)
+    });
+  };
+
+  const handleSaveEditVisit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingVisit?.id) return;
+    try {
+      const computedDebt = Math.max(0, Number(editVisitForm.totalPrice) - Number(editVisitForm.paidAmount));
+      const updates: Partial<ServiceVisitDoc> = {
+        currentOdometer: Number(editVisitForm.currentOdometer),
+        nextOdometer: Number(editVisitForm.nextOdometer),
+        oilName: editVisitForm.oilName,
+        viscosity: editVisitForm.viscosity,
+        oilLitersUsed: Number(editVisitForm.oilLitersUsed),
+        filterCode: editVisitForm.filterCode,
+        technicalNotes: editVisitForm.technicalNotes,
+        totalPrice: Number(editVisitForm.totalPrice),
+        paidAmount: Number(editVisitForm.paidAmount),
+        debtAmount: computedDebt
+      };
+      await updateServiceVisit(editingVisit.id, updates);
+      if (customer?.id) {
+        await selectCustomerById(customer.id);
+      }
+      setEditingVisit(null);
+      await loadCustomersDirectory();
+    } catch (err: any) {
+      alert(err.message || 'خطأ أثناء تعديل العملية');
+    }
+  };
+
+  const handleDeleteVisit = async (visitId: string) => {
+    if (!window.confirm('هل أنت متأكد من حذف هذه العملية من سجل الزبون؟')) return;
+    try {
+      await deleteServiceVisit(visitId);
+      if (customer?.id) {
+        await selectCustomerById(customer.id);
+      }
+      await loadCustomersDirectory();
+    } catch (err: any) {
+      alert(err.message || 'خطأ أثناء حذف العملية');
+    }
+  };
+
+  const openQrShareForVehicle = (v: VehicleDoc, c: CustomerDoc) => {
+    const latestForCar = history.find(h => h.vehicleId === v.id) || history[0] || null;
+    setQrModalVehicle(v);
+    setQrModalCustomer(c);
+    setQrModalVisit(latestForCar);
+    setQrModalOpen(true);
+  };
+
   const generateWhatsAppOilReminder = (v?: VehicleDoc) => {
     if (!customer) return;
     const car = v || vehicles[0];
     const cleanPhone = customer.phoneNumber.replace(/\D/g, '').replace(/^0/, '964');
-    const msg = `السلام عليكم ورحمة الله أخي ${customer.fullName} المحترم،%0Aتحية طيبة من *مركز حسين الأسدي لخدمات الزيوت*.%0Aنود تذكيركم بأن موعد تبديل زيت محرك سيارتكم (${car?.makeModel || ''} - لوحة: ${car?.plateNumber || ''}) أصبح قريباً عند العداد (${car?.nextOdometer?.toLocaleString() || 0} كم).%0A📍 موقع الورشة: https://maps.app.goo.gl/Hfe2TZ3x96CTq8pH8%0Aأهلاً وسهلاً بكم في أي وقت!`;
+    const cardLink =
+      typeof window !== 'undefined' && car?.qrCodeId
+        ? `${window.location.origin}/public/vehicle/${encodeURIComponent(car.qrCodeId)}`
+        : '';
+    const msg =
+      `السلام عليكم ورحمة الله أخي ${customer.fullName} المحترم،%0A` +
+      `تحية طيبة من *مركز حسين الأسدي لخدمات الزيوت*.%0A` +
+      `نود تذكيركم بأن موعد تبديل زيت محرك سيارتكم (${car?.makeModel || ''} - لوحة: ${car?.plateNumber || ''}) أصبح قريباً عند العداد (${car?.nextOdometer?.toLocaleString() || 0} كم).%0A` +
+      (cardLink ? `🔗 بطاقة سيارتك الإلكترونية: ${encodeURIComponent(cardLink)}%0A` : '') +
+      `📍 موقع الورشة: https://maps.app.goo.gl/Hfe2TZ3x96CTq8pH8%0A` +
+      `أهلاً وسهلاً بكم في أي وقت!`;
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank');
   };
 
@@ -291,7 +690,52 @@ export default function CustomerDossierPage() {
       <HeaderNav />
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 space-y-5">
-        
+
+        {/* Top Action Bar: Excel Import/Export + Loyalty System Status (Inactive by default) */}
+        <section className="bg-white border-2 border-slate-200 rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setExcelImportModal(true)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-black text-xs sm:text-sm flex items-center gap-2 shadow-sm transition"
+            >
+              <Upload className="w-4 h-4" />
+              <span>رفع واستيراد بيانات من إكسل (Excel)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExportCustomersExcel}
+              className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 rounded-xl font-black text-xs sm:text-sm flex items-center gap-2 shadow-sm transition"
+            >
+              <Download className="w-4 h-4 text-amber-400" />
+              <span>تصدير الزبائن والديون إلى إكسل</span>
+            </button>
+          </div>
+
+          {/* Loyalty System Control (Inactive by default as requested) */}
+          <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-xl">
+            <Gift className={`w-5 h-5 ${loyaltyEnabled ? 'text-amber-600' : 'text-slate-400'}`} />
+            <div className="text-xs">
+              <span className="font-black text-slate-800 block">
+                نظام مكافآت الزبائن: {loyaltyEnabled ? 'مفعّل حالياً' : 'متوقف حالياً (للتشغيل لاحقاً)'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={toggleLoyaltySystem}
+              className={`px-3 py-1.5 rounded-lg font-black text-xs flex items-center gap-1 transition ${
+                loyaltyEnabled
+                  ? 'bg-amber-500 text-white'
+                  : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+              }`}
+            >
+              <Power className="w-3.5 h-3.5" />
+              <span>{loyaltyEnabled ? 'إيقاف مؤقت' : 'تفعيل النظام'}</span>
+            </button>
+          </div>
+        </section>
+
         {/* Top Interactive Summary Cards: All Customers vs Debtors */}
         <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Card 1: Total Registered Customers (Click to show ALL customers) */}
@@ -531,23 +975,34 @@ export default function CustomerDossierPage() {
                         </span>
 
                         <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          {custCars[0] && (
+                            <button
+                              type="button"
+                              onClick={() => openQrShareForVehicle(custCars[0], c)}
+                              className="py-2 px-2.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-xl font-black text-xs flex items-center gap-1 transition"
+                              title="مشاركة رابط / QR البطاقة الإلكترونية للزبون"
+                            >
+                              <QrCode className="w-3.5 h-3.5" />
+                              <span>الرابط / QR</span>
+                            </button>
+                          )}
                           {hasDebt && (
                             <button
                               type="button"
                               onClick={() => sendMonthlyWhatsAppDebtReminder(c)}
-                              className="py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs flex items-center gap-1 shadow-sm transition"
+                              className="py-2 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs flex items-center gap-1 shadow-sm transition"
                               title="إرسال تذكير واتساب بالدين"
                             >
                               <MessageSquare className="w-3.5 h-3.5" />
-                              <span>تذكير واتساب</span>
+                              <span>واتساب</span>
                             </button>
                           )}
                           <button
                             type="button"
                             onClick={() => c.id && selectCustomerById(c.id)}
-                            className="py-2 px-3.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-black text-xs transition"
+                            className="py-2 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-black text-xs transition"
                           >
-                            عرض كل العمليات 👈
+                            عرض العمليات 👈
                           </button>
                         </div>
                       </div>
@@ -595,13 +1050,45 @@ export default function CustomerDossierPage() {
                     <span className="bg-amber-50 text-amber-900 text-sm px-3 py-0.5 rounded-full border border-amber-300 font-black">
                       {history.length + directSales.length + debtPayments.length} عملية مسجلة
                     </span>
+                    {loyaltyEnabled && (
+                      <span className="bg-purple-50 text-purple-900 text-xs px-3 py-0.5 rounded-full border border-purple-300 font-black">
+                        نقاط المكافآت: {customer.loyaltyPoints || 0} نقطة
+                      </span>
+                    )}
                   </div>
-                  <p className="text-slate-600 font-mono font-black text-base mt-1">{customer.phoneNumber}</p>
+                  <div className="flex items-center gap-3 mt-1">
+                    <p className="text-slate-600 font-mono font-black text-base">{customer.phoneNumber}</p>
+                    <button
+                      type="button"
+                      onClick={openEditCustomer}
+                      className="text-xs font-black text-blue-700 hover:underline flex items-center gap-1"
+                    >
+                      <Edit className="w-3.5 h-3.5" /> تعديل بيانات الزبون
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDeleteCustomer}
+                      className="text-xs font-black text-red-600 hover:underline flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> حذف الزبون
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {/* Quick Actions */}
               <div className="flex flex-wrap gap-2.5 w-full md:w-auto">
+                {vehicles[0] && (
+                  <button
+                    type="button"
+                    onClick={() => openQrShareForVehicle(vehicles[0], customer)}
+                    className="flex-1 md:flex-none flex items-center justify-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white px-4 py-3 rounded-xl font-black text-sm shadow-sm transition"
+                  >
+                    <QrCode className="w-4 h-4" />
+                    <span>مشاركة رابط / QR للزبون</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => setAddCarModal(true)}
                   className="flex-1 md:flex-none flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white px-4 py-3 rounded-xl font-black text-sm transition"
@@ -630,7 +1117,7 @@ export default function CustomerDossierPage() {
               </div>
             </div>
 
-            {/* Registered Vehicles Grid (Multi-car view with Iraqi License Plate UI & Oil Specs) */}
+            {/* Registered Vehicles Grid (Multi-car view with Iraqi License Plate UI, QR Share, Edit/Delete) */}
             <div className="bg-white border-2 border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
               <h2 className="text-base font-black text-slate-950 flex items-center gap-2">
                 <Car className="w-5 h-5 text-amber-600" />
@@ -661,6 +1148,36 @@ export default function CustomerDossierPage() {
                     <div className="text-sm text-slate-700 font-mono font-bold flex justify-between pt-2 border-t border-slate-200">
                       <span>السابق: {v.lastOdometer?.toLocaleString()} كم</span>
                       <span className="text-emerald-700 font-black">القادم: {v.nextOdometer?.toLocaleString()} كم</span>
+                    </div>
+
+                    {/* Vehicle Action Buttons: Share QR/Link + Edit + Delete */}
+                    <div className="pt-2 border-t border-slate-200 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openQrShareForVehicle(v, customer)}
+                        className="flex-1 py-2 px-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-sm transition"
+                      >
+                        <QrCode className="w-4 h-4" />
+                        <span>رابط / QR البطاقة لواتساب الزبون</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => openEditVehicleModal(v)}
+                        className="p-2 bg-white hover:bg-blue-50 text-blue-700 border border-slate-300 rounded-xl"
+                        title="تعديل السيارة"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => v.id && handleDeleteVehicle(v.id, v.makeModel)}
+                        className="p-2 bg-white hover:bg-red-50 text-red-600 border border-slate-300 rounded-xl"
+                        title="حذف السيارة"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -829,14 +1346,34 @@ export default function CustomerDossierPage() {
                                 )}
                               </div>
 
-                              <button
-                                type="button"
-                                onClick={() => openVisitReceipt(item)}
-                                className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-sans font-black text-xs flex items-center gap-1.5 transition"
-                              >
-                                <Printer className="w-4 h-4 text-amber-400" />
-                                <span>طباعة / إرسال الوصل بالواتساب</span>
-                              </button>
+                              <div className="flex items-center gap-2 font-sans">
+                                <button
+                                  type="button"
+                                  onClick={() => openVisitReceipt(item)}
+                                  className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-black text-xs flex items-center gap-1.5 transition"
+                                >
+                                  <Printer className="w-4 h-4 text-amber-400" />
+                                  <span>الوصل + الرابط للواتساب</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => openEditVisitModal(item)}
+                                  className="p-2 bg-white hover:bg-blue-50 text-blue-700 border border-slate-300 rounded-xl"
+                                  title="تعديل العملية"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => item.id && handleDeleteVisit(item.id)}
+                                  className="p-2 bg-white hover:bg-red-50 text-red-600 border border-slate-300 rounded-xl"
+                                  title="حذف العملية"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
                           </div>
                         );
@@ -885,6 +1422,354 @@ export default function CustomerDossierPage() {
         onClose={() => setReceiptOpen(false)}
         data={receiptData}
       />
+
+      {/* QR & Link Share Modal */}
+      <QrShareModal
+        isOpen={qrModalOpen}
+        onClose={() => setQrModalOpen(false)}
+        vehicle={qrModalVehicle}
+        customer={qrModalCustomer}
+        lastVisit={qrModalVisit}
+      />
+
+      {/* EXCEL IMPORT MODAL */}
+      {excelImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm">
+          <div className="bg-white border-2 border-slate-300 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b-2 border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
+                <h2 className="text-lg font-black text-slate-950">
+                  رفع واستيراد بيانات الزبائن والسيارات والديون من ملف إكسل (Excel)
+                </h2>
+              </div>
+              <button onClick={() => setExcelImportModal(false)} className="text-slate-400 hover:text-slate-800">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="bg-emerald-50 border-2 border-emerald-200 rounded-2xl p-4 text-xs sm:text-sm space-y-2 text-emerald-950 font-bold">
+              <p>
+                يمكنك رفع ملف الإكسل الحالي الخاص بك مباشرةً (يتعرف النظام تلقائياً على الأعمدة مثل: <strong>اسم الزبون، رقم الهاتف، مبلغ الدين، نوع السيارة، رقم اللوحة، العداد الحالي، نوع الزيت، سايز الزيت، كمية الزيت</strong>).
+              </p>
+              <button
+                type="button"
+                onClick={handleDownloadExcelTemplate}
+                className="inline-flex items-center gap-1.5 bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-400 px-3.5 py-2 rounded-xl font-black text-xs transition"
+              >
+                <Download className="w-4 h-4" />
+                <span>تحميل قالب إكسل جاهز (اختياري)</span>
+              </button>
+            </div>
+
+            <div className="border-2 border-dashed border-slate-300 rounded-2xl p-6 text-center space-y-3 bg-slate-50">
+              <Upload className="w-10 h-10 text-amber-600 mx-auto" />
+              <label className="block cursor-pointer">
+                <span className="bg-amber-500 hover:bg-amber-600 text-white px-5 py-3 rounded-xl font-black text-sm inline-block shadow-sm">
+                  اختر ملف الإكسل (.xlsx / .xls / .csv) من جهازك
+                </span>
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleExcelFileSelected}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            {parsedExcelRows.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="font-black text-sm text-slate-900">
+                    تم قراءة ({parsedExcelRows.length}) سجل جاهز للاستيراد:
+                  </span>
+                </div>
+                <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-100 font-black text-slate-800">
+                      <tr>
+                        <th className="p-2">الاسم</th>
+                        <th className="p-2">الهاتف</th>
+                        <th className="p-2">السيارة</th>
+                        <th className="p-2">اللوحة</th>
+                        <th className="p-2">الدين</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-bold">
+                      {parsedExcelRows.slice(0, 30).map((r, i) => (
+                        <tr key={i}>
+                          <td className="p-2">{r.fullName}</td>
+                          <td className="p-2 font-mono">{r.phoneNumber}</td>
+                          <td className="p-2">{r.makeModel || '—'}</td>
+                          <td className="p-2 font-mono">{r.plateNumber || '—'}</td>
+                          <td className="p-2 font-mono text-red-600">{(r.totalDebt || 0).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={importingExcel}
+                  onClick={handleConfirmExcelImport}
+                  className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-2xl text-base flex items-center justify-center gap-2 shadow-lg transition"
+                >
+                  {importingExcel ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />}
+                  <span>تأكيد وحفظ ({parsedExcelRows.length}) زبون في النظام الآن</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* EDIT CUSTOMER MODAL */}
+      {editCustomerModal && customer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white border-2 border-slate-200 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h2 className="text-base font-black text-slate-950">تعديل بيانات الزبون</h2>
+              <button onClick={() => setEditCustomerModal(false)} className="text-slate-400 hover:text-slate-700">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveEditCustomer} className="space-y-3.5 text-sm">
+              <div>
+                <label className="block font-black text-slate-800 mb-1">اسم الزبون *</label>
+                <input
+                  type="text"
+                  required
+                  value={editCustForm.fullName}
+                  onChange={(e) => setEditCustForm({ ...editCustForm, fullName: e.target.value })}
+                  className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3.5 py-2.5 font-black text-slate-950"
+                />
+              </div>
+              <div>
+                <label className="block font-black text-slate-800 mb-1">رقم الهاتف *</label>
+                <input
+                  type="text"
+                  required
+                  value={editCustForm.phoneNumber}
+                  onChange={(e) => setEditCustForm({ ...editCustForm, phoneNumber: e.target.value })}
+                  className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3.5 py-2.5 font-mono font-black text-slate-950"
+                />
+              </div>
+              <div>
+                <label className="block font-black text-slate-800 mb-1">إجمالي الدين المسجل (د.ع)</label>
+                <input
+                  type="number"
+                  value={editCustForm.totalDebt}
+                  onChange={(e) => setEditCustForm({ ...editCustForm, totalDebt: Number(e.target.value) })}
+                  className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3.5 py-2.5 font-mono font-black text-red-600"
+                />
+              </div>
+              <button type="submit" className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl text-base">
+                حفظ التعديلات
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT VEHICLE MODAL */}
+      {editingVehicle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white border-2 border-slate-200 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h2 className="text-base font-black text-slate-950">تعديل بيانات السيارة</h2>
+              <button onClick={() => setEditingVehicle(null)} className="text-slate-400 hover:text-slate-700">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveEditVehicle} className="space-y-3.5 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">نوع السيارة *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editVehForm.makeModel}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, makeModel: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">رقم اللوحة *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editVehForm.plateNumber}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, plateNumber: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">العداد الحالي (كم)</label>
+                  <input
+                    type="number"
+                    value={editVehForm.lastOdometer}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, lastOdometer: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">العداد القادم (كم)</label>
+                  <input
+                    type="number"
+                    value={editVehForm.nextOdometer}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, nextOdometer: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black text-amber-700"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">كمية الزيت (لتر)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editVehForm.recommendedLiters}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, recommendedLiters: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">سايز الزيت</label>
+                  <input
+                    type="text"
+                    value={editVehForm.preferredOil}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, preferredOil: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">نوع الزيت</label>
+                  <input
+                    type="text"
+                    value={editVehForm.preferredOilName}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, preferredOilName: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">نوع الفلتر</label>
+                  <input
+                    type="text"
+                    value={editVehForm.preferredFilter}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, preferredFilter: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-black"
+                  />
+                </div>
+              </div>
+              <button type="submit" className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl text-base">
+                حفظ تعديلات السيارة
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT SERVICE VISIT MODAL */}
+      {editingVisit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white border-2 border-slate-200 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h2 className="text-base font-black text-slate-950">تعديل بيانات عملية التبديل</h2>
+              <button onClick={() => setEditingVisit(null)} className="text-slate-400 hover:text-slate-700">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveEditVisit} className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">العداد الحالي (كم)</label>
+                  <input
+                    type="number"
+                    value={editVisitForm.currentOdometer}
+                    onChange={(e) => setEditVisitForm({ ...editVisitForm, currentOdometer: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">العداد القادم (كم)</label>
+                  <input
+                    type="number"
+                    value={editVisitForm.nextOdometer}
+                    onChange={(e) => setEditVisitForm({ ...editVisitForm, nextOdometer: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">اسم الزيت</label>
+                  <input
+                    type="text"
+                    value={editVisitForm.oilName}
+                    onChange={(e) => setEditVisitForm({ ...editVisitForm, oilName: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">السايز / اللزوجة</label>
+                  <input
+                    type="text"
+                    value={editVisitForm.viscosity}
+                    onChange={(e) => setEditVisitForm({ ...editVisitForm, viscosity: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">الكمية (لتر)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editVisitForm.oilLitersUsed}
+                    onChange={(e) => setEditVisitForm({ ...editVisitForm, oilLitersUsed: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">الفلتر</label>
+                  <input
+                    type="text"
+                    value={editVisitForm.filterCode}
+                    onChange={(e) => setEditVisitForm({ ...editVisitForm, filterCode: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">المبلغ الإجمالي (د.ع)</label>
+                  <input
+                    type="number"
+                    value={editVisitForm.totalPrice}
+                    onChange={(e) => setEditVisitForm({ ...editVisitForm, totalPrice: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">المبلغ الواصل (د.ع)</label>
+                  <input
+                    type="number"
+                    value={editVisitForm.paidAmount}
+                    onChange={(e) => setEditVisitForm({ ...editVisitForm, paidAmount: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black text-emerald-700"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block font-black text-slate-800 mb-1">ملاحظات الفحص</label>
+                <input
+                  type="text"
+                  value={editVisitForm.technicalNotes}
+                  onChange={(e) => setEditVisitForm({ ...editVisitForm, technicalNotes: e.target.value })}
+                  className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-bold"
+                />
+              </div>
+              <button type="submit" className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl text-base">
+                حفظ تعديلات العملية
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Add Car Modal */}
       {addCarModal && customer && (

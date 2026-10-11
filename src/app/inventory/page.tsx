@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import * as XLSX from 'xlsx';
 import HeaderNav from '@/components/HeaderNav';
 import { 
   getProductsList, 
@@ -20,7 +21,9 @@ import {
   Save, 
   Loader2,
   Package,
-  Layers
+  Layers,
+  AlertTriangle,
+  Download
 } from 'lucide-react';
 
 // Helper to determine whether a category is measured in Liters or Pieces
@@ -215,6 +218,29 @@ export default function FluidInventoryPage() {
     }
   };
 
+  const handleExportInventoryExcel = () => {
+    const rows = products.map((p, idx) => ({
+      'ت': idx + 1,
+      'اسم المنتج': p.name,
+      'القسم': PRODUCT_CATEGORY_LABELS[p.category] || p.category,
+      'السايزات المتوفرة': (p.availableSizes || []).join(' / ') || p.viscosity || '',
+      'الرصيد المتاح': p.totalLitersStock,
+      'وحدة القياس': isLiquidCategory(p.category) ? 'لتر' : 'قطعة',
+      'سعر التكلفة (د.ع)': p.unitCost || 0,
+      'سعر البيع المباشر (د.ع)': p.directSalePrice || p.salePrice || 0,
+      'سعر البيع مع التبديل (د.ع)': p.serviceSalePrice || p.salePrice || 0
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'جرد المخزن');
+    XLSX.writeFile(wb, `جرد_مخزن_مركز_حسين_الاسدي_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
+  const lowStockProducts = products.filter((p) => {
+    const liquid = isLiquidCategory(p.category);
+    return liquid ? Number(p.totalLitersStock || 0) <= 16 : Number(p.totalLitersStock || 0) <= 5;
+  });
+
   const filtered = products.filter((p) => {
     const matchesCat = categoryFilter === 'all' || p.category === categoryFilter;
     const sizesStr = (p.availableSizes || []).join(' ');
@@ -245,14 +271,49 @@ export default function FluidInventoryPage() {
             </p>
           </div>
 
-          <button
-            onClick={openAddModal}
-            className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-6 py-3.5 rounded-xl font-black text-sm shadow-md shadow-amber-500/20 transition w-full md:w-auto justify-center"
-          >
-            <Plus className="w-5 h-5 stroke-[3]" />
-            <span>+ إضافة منتج جديد للمخزون</span>
-          </button>
+          <div className="flex flex-wrap gap-2.5 w-full md:w-auto">
+            <button
+              type="button"
+              onClick={handleExportInventoryExcel}
+              className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-5 py-3.5 rounded-xl font-black text-sm shadow-sm transition flex-1 md:flex-none"
+            >
+              <Download className="w-4 h-4 text-amber-400" />
+              <span>تصدير المخزون إلى Excel</span>
+            </button>
+
+            <button
+              onClick={openAddModal}
+              className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-6 py-3.5 rounded-xl font-black text-sm shadow-md shadow-amber-500/20 transition flex-1 md:flex-none justify-center"
+            >
+              <Plus className="w-5 h-5 stroke-[3]" />
+              <span>+ إضافة منتج جديد للمخزون</span>
+            </button>
+          </div>
         </div>
+
+        {/* Low Stock Alert Banner (تنبيه نواقص المخزن) */}
+        {lowStockProducts.length > 0 && (
+          <div className="bg-red-50 border-2 border-red-300 rounded-2xl p-4 shadow-sm space-y-2">
+            <div className="flex items-center gap-2 text-red-900 font-black text-sm sm:text-base">
+              <AlertTriangle className="w-5 h-5 text-red-600" />
+              <span>تنبيه نواقص المخزون ({lowStockProducts.length} مواد أوشكت على النفاد وتحتاج طلبية جديدة):</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {lowStockProducts.map((lp) => (
+                <span
+                  key={lp.id}
+                  onClick={() => openEditModal(lp)}
+                  className="cursor-pointer bg-white hover:bg-red-100 border border-red-300 text-red-900 px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition"
+                >
+                  <span>{lp.name}</span>
+                  <span className="font-mono text-red-600">
+                    ({lp.totalLitersStock} {isLiquidCategory(lp.category) ? 'لتر' : 'قطعة'})
+                  </span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Success Alert */}
         {successMsg && (

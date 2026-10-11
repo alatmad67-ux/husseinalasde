@@ -19,7 +19,8 @@ import {
   ProductDoc,
   ServiceVisitDoc,
   DirectSaleDoc,
-  DebtPaymentDoc
+  DebtPaymentDoc,
+  ExpenseDoc
 } from '@/types/firestore';
 
 // Helper to get raw timestamp in ms for accurate sorting
@@ -326,6 +327,191 @@ export async function addVehicleToCustomer(data: {
 }
 
 // ==============================================================================
+// 1.3 EDIT / DELETE CUSTOMER, VEHICLE, OR SERVICE VISIT
+// ==============================================================================
+export async function updateCustomer(customerId: string, updates: Partial<CustomerDoc>) {
+  const ref = doc(db, 'customers', customerId);
+  await updateDoc(ref, {
+    ...updates,
+    updatedAt: serverTimestamp()
+  });
+  return { success: true };
+}
+
+export async function deleteCustomer(customerId: string) {
+  const vehSnap = await getDocs(query(collection(db, 'vehicles'), where('customerId', '==', customerId)));
+  for (const v of vehSnap.docs) {
+    await deleteDoc(doc(db, 'vehicles', v.id));
+  }
+  await deleteDoc(doc(db, 'customers', customerId));
+  return { success: true };
+}
+
+export async function updateVehicle(vehicleId: string, updates: Partial<VehicleDoc>) {
+  const ref = doc(db, 'vehicles', vehicleId);
+  await updateDoc(ref, {
+    ...updates,
+    updatedAt: serverTimestamp()
+  });
+  return { success: true };
+}
+
+export async function deleteVehicle(vehicleId: string) {
+  await deleteDoc(doc(db, 'vehicles', vehicleId));
+  return { success: true };
+}
+
+export async function updateServiceVisit(visitId: string, updates: Partial<ServiceVisitDoc>) {
+  return await runTransaction(db, async (transaction) => {
+    const visitRef = doc(db, 'service_visits', visitId);
+    const visitSnap = await transaction.get(visitRef);
+    if (!visitSnap.exists()) throw new Error('العملية غير موجودة');
+
+    const oldData = visitSnap.data() as ServiceVisitDoc;
+    const oldDebt = Number(oldData.debtAmount || 0);
+    const newDebt = updates.debtAmount !== undefined ? Number(updates.debtAmount) : oldDebt;
+    const debtDiff = newDebt - oldDebt;
+
+    if (debtDiff !== 0 && oldData.customerId) {
+      const custRef = doc(db, 'customers', oldData.customerId);
+      const custSnap = await transaction.get(custRef);
+      if (custSnap.exists()) {
+        const currentDebt = Number(custSnap.data()?.totalDebt || 0);
+        transaction.update(custRef, {
+          totalDebt: Math.max(0, currentDebt + debtDiff)
+        });
+      }
+    }
+
+    transaction.update(visitRef, {
+      ...updates,
+      updatedAt: serverTimestamp()
+    });
+
+    return { success: true };
+  });
+}
+
+export async function deleteServiceVisit(visitId: string) {
+  return await runTransaction(db, async (transaction) => {
+    const visitRef = doc(db, 'service_visits', visitId);
+    const visitSnap = await transaction.get(visitRef);
+    if (!visitSnap.exists()) return { success: true };
+
+    const oldData = visitSnap.data() as ServiceVisitDoc;
+    const oldDebt = Number(oldData.debtAmount || 0);
+
+    if (oldDebt > 0 && oldData.customerId) {
+      const custRef = doc(db, 'customers', oldData.customerId);
+      const custSnap = await transaction.get(custRef);
+      if (custSnap.exists()) {
+        const currentDebt = Number(custSnap.data()?.totalDebt || 0);
+        transaction.update(custRef, {
+          totalDebt: Math.max(0, currentDebt - oldDebt)
+        });
+      }
+    }
+
+    transaction.delete(visitRef);
+    return { success: true };
+  });
+}
+
+// ==============================================================================
+// 1.4 BULK IMPORT CUSTOMERS & VEHICLES FROM EXCEL (استيراد بيانات من إكسل)
+// ==============================================================================
+export interface ExcelImportRow {
+  fullName: string;
+  phoneNumber: string;
+  totalDebt?: number;
+  makeModel?: string;
+  plateNumber?: string;
+  modelYear?: number;
+  engineSize?: string;
+  lastOdometer?: number;
+  nextOdometer?: number;
+  recommendedLiters?: number;
+  preferredOilName?: string;
+  preferredOil?: string;
+  preferredFilter?: string;
+}
+
+export async function bulkImportCustomersFromExcel(rows: ExcelImportRow[]) {
+  let importedCustomers = 0;
+  let importedVehicles = 0;
+
+  const custSnap = await getDocs(collection(db, 'customers'));
+  const phoneMap = new Map<string, string>();
+  custSnap.docs.forEach(d => {
+    const data = d.data();
+    if (data.phoneNumber) {
+      phoneMap.set(String(data.phoneNumber).trim(), d.id);
+    }
+  });
+
+  for (const row of rows) {
+    const fullName = String(row.fullName || '').trim();
+    const phoneNumber = String(row.phoneNumber || '').trim();
+    if (!fullName && !phoneNumber) continue;
+
+    let customerId = phoneNumber ? phoneMap.get(phoneNumber) || '' : '';
+
+    if (!customerId) {
+      const newCust = await addDoc(collection(db, 'customers'), {
+        fullName: fullName || 'زبون بدون اسم',
+        phoneNumber: phoneNumber || '—',
+        loyaltyPoints: 0,
+        totalDebt: Number(row.totalDebt || 0),
+        createdAt: serverTimestamp()
+      });
+      customerId = newCust.id;
+      if (phoneNumber) phoneMap.set(phoneNumber, customerId);
+      importedCustomers++;
+    } else if (Number(row.totalDebt || 0) > 0) {
+      const cRef = doc(db, 'customers', customerId);
+      const cDoc = await getDoc(cRef);
+      if (cDoc.exists()) {
+        const existingDebt = Number(cDoc.data()?.totalDebt || 0);
+        await updateDoc(cRef, {
+          totalDebt: existingDebt + Number(row.totalDebt || 0)
+        });
+      }
+    }
+
+    if (row.makeModel || row.plateNumber) {
+      const plateStr = String(row.plateNumber || 'بدون لوحة').trim();
+      const lastOdo = Number(row.lastOdometer || 0);
+      const nextOdo = Number(row.nextOdometer || (lastOdo > 0 ? lastOdo + 3000 : 3000));
+      const qrCodeId = `${plateStr.replace(/\s+/g, '-').replace(/[^\w-]/g, '')}-${Date.now().toString().slice(-4)}-${Math.floor(Math.random() * 90 + 10)}`;
+
+      await addDoc(collection(db, 'vehicles'), {
+        customerId,
+        makeModel: String(row.makeModel || 'سيارة').trim(),
+        plateNumber: plateStr,
+        engineSize: String(row.engineSize || '').trim(),
+        modelYear: Number(row.modelYear) || new Date().getFullYear(),
+        lastOdometer: lastOdo,
+        nextOdometer: nextOdo,
+        lastServiceDate: null,
+        recommendedLiters: row.recommendedLiters ? Number(row.recommendedLiters) : null,
+        preferredOilName: String(row.preferredOilName || '').trim(),
+        preferredOil: String(row.preferredOil || '').trim(),
+        preferredFilter: String(row.preferredFilter || '').trim(),
+        qrCodeId,
+        createdAt: serverTimestamp()
+      });
+      importedVehicles++;
+    }
+  }
+
+  return {
+    success: true,
+    importedCustomers,
+    importedVehicles
+  };
+}
+
+// ==============================================================================
 // 2. RECORD SERVICE VISIT (Atomic Transaction: Deducts Engine Oil + Gear Oil)
 // ==============================================================================
 export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' | 'visitDate'>) {
@@ -466,14 +652,16 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       ...(filterCode ? { preferredFilter: filterCode } : {})
     });
 
-    // 6. Write: Update Customer Debt & Loyalty (+10 points)
+    // 6. Write: Update Customer Debt & Loyalty (only if loyalty system is active)
     const customerData = customerSnap.data() as any;
     const currentCustomerDebt = Number(customerData?.totalDebt || 0);
     const currentLoyalty = Number(customerData?.loyaltyPoints || 0);
+    const isLoyaltyEnabled =
+      typeof window !== 'undefined' && localStorage.getItem('asadi_loyalty_enabled') === 'true';
 
     transaction.update(customerRef, {
       totalDebt: currentCustomerDebt + (debtAmount > 0 ? debtAmount : 0),
-      loyaltyPoints: currentLoyalty + 10
+      loyaltyPoints: isLoyaltyEnabled ? currentLoyalty + 10 : currentLoyalty
     });
 
     cachedProducts = null;
@@ -597,7 +785,7 @@ export async function getCustomerDossier(customerId: string) {
 }
 
 // ==============================================================================
-// 5. GET VEHICLE BY QR CODE
+// 5. GET VEHICLE BY QR CODE (مع كامل سجل الزيارات وبيانات الزبون للبطاقة الرقمية)
 // ==============================================================================
 export async function getVehicleByQrCode(qrCodeId: string) {
   try {
@@ -614,11 +802,26 @@ export async function getVehicleByQrCode(qrCodeId: string) {
 
     const vehDoc = vehSnap.docs[0];
     const vehicle = { id: vehDoc.id, ...vehDoc.data() } as VehicleDoc;
-    const lastVisit = await getLastVisitForVehicle(vehicle.id!);
+
+    const [visitSnap, customerSnap] = await Promise.all([
+      getDocs(query(collection(db, 'service_visits'), where('vehicleId', '==', vehicle.id!))),
+      vehicle.customerId ? getDoc(doc(db, 'customers', vehicle.customerId)) : Promise.resolve(null)
+    ]);
+
+    const history = visitSnap.docs
+      .map(d => ({ id: d.id, ...d.data() } as ServiceVisitDoc))
+      .sort((a, b) => getRawDateMillis(b.visitDate) - getRawDateMillis(a.visitDate));
+
+    const lastVisit = history[0] || null;
+    const customer = customerSnap && customerSnap.exists()
+      ? ({ id: customerSnap.id, ...customerSnap.data() } as CustomerDoc)
+      : null;
 
     return {
       vehicle,
-      lastVisit
+      customer,
+      lastVisit,
+      history
     };
   } catch (error) {
     console.error('Error in getVehicleByQrCode:', error);
@@ -688,13 +891,12 @@ export async function getProductsList(forceRefresh = false): Promise<ProductDoc[
 
     for (const d of productsSnap.docs) {
       const data = d.data() as ProductDoc;
-      // Automatically delete any old auto-seeded mock products from Firestore
       if (!mockCleanupDone && OLD_SEEDED_MOCK_NAMES.has(data.name)) {
         try {
           await deleteDoc(doc(db, 'products', d.id));
           continue;
         } catch {
-          // ignore if delete fails
+          // ignore
         }
       }
       realProducts.push({ id: d.id, ...data });
@@ -748,6 +950,35 @@ export async function deleteProduct(id: string) {
   } catch (error) {
     console.error('Error in deleteProduct:', error);
     throw error;
+  }
+}
+
+// ==============================================================================
+// 7.5 WORKSHOP EXPENSES (سجل مصاريف الورشة اليومية والشهرية)
+// ==============================================================================
+export async function addExpense(expense: Omit<ExpenseDoc, 'id' | 'expenseDate'>) {
+  const docRef = await addDoc(collection(db, 'expenses'), {
+    ...expense,
+    amount: Number(expense.amount || 0),
+    expenseDate: serverTimestamp()
+  });
+  return { success: true, id: docRef.id };
+}
+
+export async function deleteExpense(expenseId: string) {
+  await deleteDoc(doc(db, 'expenses', expenseId));
+  return { success: true };
+}
+
+export async function getExpensesList(): Promise<ExpenseDoc[]> {
+  try {
+    const snap = await getDocs(collection(db, 'expenses'));
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as ExpenseDoc))
+      .sort((a, b) => getRawDateMillis(b.expenseDate) - getRawDateMillis(a.expenseDate));
+  } catch (err) {
+    console.warn('Error fetching expenses:', err);
+    return [];
   }
 }
 
@@ -808,16 +1039,17 @@ export async function getAllDebtorsSummary() {
 }
 
 // ==============================================================================
-// 9. GET COMPREHENSIVE ANALYTICS & DUE VEHICLES REPORT
+// 9. GET COMPREHENSIVE ANALYTICS, EXPENSES & DUE VEHICLES REPORT
 // ==============================================================================
 export async function getWorkshopReportsData() {
   try {
-    const [visitsSnap, directSnap, productsList, custSnap, vehSnap] = await Promise.all([
+    const [visitsSnap, directSnap, productsList, custSnap, vehSnap, expensesList] = await Promise.all([
       getDocs(collection(db, 'service_visits')),
       getDocs(collection(db, 'direct_sales')),
       getProductsList(),
       getDocs(collection(db, 'customers')),
-      getDocs(collection(db, 'vehicles'))
+      getDocs(collection(db, 'vehicles')),
+      getExpensesList()
     ]);
 
     const visits = visitsSnap.docs.map(d => ({ id: d.id, ...d.data() } as ServiceVisitDoc));
@@ -830,7 +1062,8 @@ export async function getWorkshopReportsData() {
       directSales,
       products: productsList,
       customers,
-      vehicles
+      vehicles,
+      expenses: expensesList
     };
   } catch (error) {
     console.error('Error in getWorkshopReportsData:', error);
@@ -839,7 +1072,8 @@ export async function getWorkshopReportsData() {
       directSales: [],
       products: [],
       customers: [],
-      vehicles: []
+      vehicles: [],
+      expenses: []
     };
   }
 }
