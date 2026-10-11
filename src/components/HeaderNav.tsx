@@ -10,7 +10,6 @@ import {
   Users, 
   Download, 
   ShieldCheck, 
-  Car,
   LogOut,
   BarChart3
 } from 'lucide-react';
@@ -62,20 +61,24 @@ export default function HeaderNav() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-20">
           
-          {/* Logo & Workshop Title */}
-          <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center shadow-md shadow-amber-500/20 text-white font-black text-2xl">
-              <Droplet className="w-7 h-7 fill-current" />
+          {/* Official Logo & Workshop Title */}
+          <Link href="/" className="flex items-center gap-3.5 group">
+            <div className="w-14 h-14 rounded-2xl overflow-hidden border-2 border-amber-500 shadow-md bg-slate-950 flex items-center justify-center flex-shrink-0">
+              <img
+                src="/logo.jpg"
+                alt="شعار مركز حسين الأسدي"
+                className="w-full h-full object-cover"
+              />
             </div>
             <div>
-              <h1 className="font-black text-xl leading-tight tracking-wide text-slate-950">
-                مركز حسين الاسدي
+              <h1 className="font-black text-xl leading-tight tracking-wide text-slate-950 group-hover:text-amber-600 transition">
+                مركز حسين الأسدي
               </h1>
               <p className="text-xs sm:text-sm text-amber-600 font-black flex items-center gap-1 mt-0.5">
                 <ShieldCheck className="w-4 h-4" /> لخدمات المحركات وتبديل الزيوت
               </p>
             </div>
-          </div>
+          </Link>
 
           {/* Navigation Links */}
           <nav className="hidden lg:flex items-center gap-2">
@@ -99,25 +102,17 @@ export default function HeaderNav() {
             })}
           </nav>
 
-          {/* PWA Install Button & Fast Actions */}
+          {/* PWA Install Button & Logout */}
           <div className="flex items-center gap-2">
             {canInstall && (
               <button
                 onClick={handleInstallClick}
-                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-xl text-sm font-black transition shadow-md"
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-black transition shadow-md"
               >
                 <Download className="w-4 h-4" />
-                <span>تثبيت التطبيق</span>
+                <span>تثبيت النظام على الجهاز</span>
               </button>
             )}
-            <Link
-              href="/public/vehicle/camry-48291-asadi"
-              target="_blank"
-              className="hidden xl:flex items-center gap-1.5 text-sm text-slate-700 bg-slate-100 px-3.5 py-2 rounded-xl border border-slate-300 hover:bg-slate-200 font-black transition"
-            >
-              <Car className="w-4 h-4 text-amber-600" />
-              <span>ملصق QR</span>
-            </Link>
 
             {isAuthenticated && (
               <button

@@ -385,7 +385,8 @@ export default function DirectSalesPage() {
                         <label className="text-[11px] font-black text-slate-600 block">الكمية ({item.unitLabel})</label>
                         <input
                           type="number"
-                          min="1"
+                          step={item.unitLabel === 'لتر' ? '0.5' : '1'}
+                          min={item.unitLabel === 'لتر' ? '0.5' : '1'}
                           value={item.qty}
                           onChange={(e) => updateCartItemQty(item.key, Number(e.target.value))}
                           className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1 font-mono font-black text-slate-950"

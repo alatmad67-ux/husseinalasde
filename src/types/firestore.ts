@@ -17,8 +17,11 @@ export interface VehicleDoc {
   lastOdometer: number;
   nextOdometer: number;
   lastServiceDate: any;
-  preferredOil?: string;
-  preferredFilter?: string;
+  // Optional vehicle oil & filter specifications (مواصفات الزيت والفلتر الاختيارية للسيارة)
+  recommendedLiters?: number; // كم لتر تأخذ السيارة
+  preferredOilName?: string;  // نوع / ماركة الزيت
+  preferredOil?: string;      // سايز / درجة اللزوجة (مثل 10W40, 5W30)
+  preferredFilter?: string;   // نوع / رقم الفلتر
   qrCodeId: string;
   updatedAt?: any;
 }

@@ -1,10 +1,10 @@
 {
-  "name": "مركز حسين الاسدي - لخدمات وتبديل الزيوت",
-  "short_name": "الاسدي للزيوت",
+  "name": "مركز حسين الأسدي - لخدمات المحركات وتبديل الزيوت",
+  "short_name": "مركز حسين الأسدي",
   "description": "النظام المتكامل لإدارة خدمات تبديل الزيوت، المبيعات المباشرة، وحسابات المركبات",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
+  "background_color": "#ffffff",
   "theme_color": "#0f172a",
   "orientation": "portrait-primary",
   "dir": "rtl",
@@ -21,29 +21,42 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
+    },
+    {
+      "src": "/logo.jpg",
+      "sizes": "1024x1024",
+      "type": "image/jpeg",
+      "purpose": "any"
     }
   ],
   "categories": ["business", "productivity", "utilities"],
   "shortcuts": [
     {
-      "name": "كاونتر الخدمة السريع",
-      "short_name": "الخدمة السريعة",
-      "description": "تسجيل موعد وتبديل زيت فوري",
-      "url": "/pos",
+      "name": "كاونتر تبديل الزيت",
+      "short_name": "كاونتر الزيت",
+      "description": "تسجيل وتبديل زيت فوري",
+      "url": "/",
       "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
     },
     {
       "name": "المبيعات المباشرة",
       "short_name": "البيع المباشر",
-      "description": "بيع عبوات ومواد دون حجز",
+      "description": "بيع عبوات ومواد مباشر",
       "url": "/direct-sales",
       "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
     },
     {
-      "name": "المخزون باللتر",
+      "name": "المخزون والمنتجات",
       "short_name": "المخزون",
-      "description": "جرد براميل وعبوات الزيوت",
+      "description": "جرد وإدارة الزيوت والفلاتر",
       "url": "/inventory",
+      "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "الأرباح والتقارير",
+      "short_name": "التقارير",
+      "description": "كشف الأرباح والديون",
+      "url": "/reports",
       "icons": [{ "src": "/icons/icon-192x192.png", "sizes": "192x192" }]
     }
   ]

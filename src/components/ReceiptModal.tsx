@@ -87,8 +87,11 @@ export default function ReceiptModal({ isOpen, data, onClose }: ReceiptModalProp
         {/* Printable Thermal Receipt Box */}
         <div id="printable-receipt" className="bg-white border-2 border-dashed border-slate-400 rounded-2xl p-5 text-slate-950 space-y-3 text-sm">
           
-          <div className="text-center border-b-2 border-slate-900 pb-3 space-y-1">
-            <h2 className="text-xl font-black">مركز حسين الاسدي</h2>
+          <div className="text-center border-b-2 border-slate-900 pb-3 space-y-1.5">
+            <div className="w-16 h-16 mx-auto rounded-2xl overflow-hidden border border-amber-500 bg-slate-950">
+              <img src="/logo.jpg" alt="شعار مركز حسين الأسدي" className="w-full h-full object-cover" />
+            </div>
+            <h2 className="text-xl font-black">مركز حسين الأسدي</h2>
             <p className="text-xs font-bold text-slate-700">لخدمات المحركات وتبديل الزيوت والفلاتر</p>
             <p className="text-xs font-mono font-bold">هاتف: 07800505015</p>
           </div>

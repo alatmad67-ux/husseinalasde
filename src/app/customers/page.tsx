@@ -60,9 +60,13 @@ export default function CustomerDossierPage() {
   const [newCarForm, setNewCarForm] = useState({
     makeModel: '',
     plateNumber: '',
-    engineSize: '2.0L',
+    engineSize: '',
     modelYear: new Date().getFullYear(),
-    lastOdometer: 0
+    lastOdometer: 0,
+    recommendedLiters: '',
+    preferredOilName: '',
+    preferredOil: '',
+    preferredFilter: ''
   });
 
   const loadDebtorsSummary = async () => {
@@ -133,7 +137,11 @@ export default function CustomerDossierPage() {
         plateNumber: newCarForm.plateNumber,
         engineSize: newCarForm.engineSize,
         modelYear: Number(newCarForm.modelYear),
-        lastOdometer: Number(newCarForm.lastOdometer)
+        lastOdometer: Number(newCarForm.lastOdometer),
+        recommendedLiters: newCarForm.recommendedLiters ? Number(newCarForm.recommendedLiters) : undefined,
+        preferredOilName: newCarForm.preferredOilName,
+        preferredOil: newCarForm.preferredOil,
+        preferredFilter: newCarForm.preferredFilter
       });
       setVehicles(prev => [...prev, res.vehicle]);
       setAddCarModal(false);
@@ -431,6 +439,18 @@ export default function CustomerDossierPage() {
                       </div>
                       <IraqiPlateBadge plateNumber={v.plateNumber} size="sm" />
                     </div>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200 text-xs space-y-1 font-bold text-slate-700">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">الزيت والسايز:</span>
+                        <strong className="text-slate-950 font-black">{v.preferredOilName || '—'} ({v.preferredOil || '—'})</strong>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">الكمية والفلتر:</span>
+                        <strong className="text-emerald-800 font-black">
+                          {v.recommendedLiters ? `${v.recommendedLiters} لتر` : '—'} | فلتر: {v.preferredFilter || '—'}
+                        </strong>
+                      </div>
+                    </div>
                     <div className="text-sm text-slate-700 font-mono font-bold flex justify-between pt-2 border-t border-slate-200">
                       <span>السابق: {v.lastOdometer?.toLocaleString()} كم</span>
                       <span className="text-emerald-700 font-black">القادم: {v.nextOdometer?.toLocaleString()} كم</span>
@@ -593,7 +613,7 @@ export default function CustomerDossierPage() {
       {/* Add Car Modal */}
       {addCarModal && customer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white border-2 border-slate-200 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+          <div className="bg-white border-2 border-slate-200 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <h2 className="text-base font-black text-slate-950">إضافة سيارة ثانية للزبون: {customer.fullName}</h2>
               <button onClick={() => setAddCarModal(false)} className="text-slate-400 hover:text-slate-700">
@@ -601,32 +621,84 @@ export default function CustomerDossierPage() {
               </button>
             </div>
             <form onSubmit={handleAddCar} className="space-y-4 text-sm">
-              <div>
-                <label className="block font-black text-slate-800 mb-1">نوع وموديل السيارة</label>
-                <input
-                  type="text"
-                  required
-                  value={newCarForm.makeModel}
-                  onChange={(e) => setNewCarForm({ ...newCarForm, makeModel: e.target.value })}
-                  className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-black"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">نوع وموديل السيارة *</label>
+                  <input
+                    type="text"
+                    required
+                    value={newCarForm.makeModel}
+                    onChange={(e) => setNewCarForm({ ...newCarForm, makeModel: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">رقم اللوحة العراقية *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="مثال: 14 A 48291"
+                    value={newCarForm.plateNumber}
+                    onChange={(e) => setNewCarForm({ ...newCarForm, plateNumber: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-mono font-black"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block font-black text-slate-800 mb-1">رقم اللوحة العراقية</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="مثال: بغداد 48291 أ"
-                  value={newCarForm.plateNumber}
-                  onChange={(e) => setNewCarForm({ ...newCarForm, plateNumber: e.target.value })}
-                  className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-mono font-black"
-                />
-                {newCarForm.plateNumber && (
-                  <div className="mt-2 flex justify-center">
-                    <IraqiPlateBadge plateNumber={newCarForm.plateNumber} size="sm" />
+              {newCarForm.plateNumber && (
+                <div className="flex justify-center">
+                  <IraqiPlateBadge plateNumber={newCarForm.plateNumber} size="sm" />
+                </div>
+              )}
+
+              <div className="bg-emerald-50/70 p-3.5 rounded-2xl border-2 border-emerald-300 space-y-2.5">
+                <span className="font-black text-emerald-950 block text-xs">
+                  مواصفات الزيت والفلتر للسيارة (اختياري - غير إجباري):
+                </span>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-700 mb-1 font-black text-xs">كم لتر تأخذ؟</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      placeholder="مثال: 4 أو 4.5"
+                      value={newCarForm.recommendedLiters}
+                      onChange={(e) => setNewCarForm({ ...newCarForm, recommendedLiters: e.target.value })}
+                      className="w-full bg-white border border-emerald-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
+                    />
                   </div>
-                )}
+                  <div>
+                    <label className="block text-slate-700 mb-1 font-black text-xs">سايز الزيت</label>
+                    <input
+                      type="text"
+                      placeholder="مثال: 10W40 أو 5W30"
+                      value={newCarForm.preferredOil}
+                      onChange={(e) => setNewCarForm({ ...newCarForm, preferredOil: e.target.value })}
+                      className="w-full bg-white border border-emerald-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 mb-1 font-black text-xs">نوع الزيت</label>
+                    <input
+                      type="text"
+                      placeholder="مثال: يورال"
+                      value={newCarForm.preferredOilName}
+                      onChange={(e) => setNewCarForm({ ...newCarForm, preferredOilName: e.target.value })}
+                      className="w-full bg-white border border-emerald-300 rounded-xl px-3 py-2 text-slate-950 font-black"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 mb-1 font-black text-xs">نوع الفلتر</label>
+                    <input
+                      type="text"
+                      placeholder="مثال: أصلي"
+                      value={newCarForm.preferredFilter}
+                      onChange={(e) => setNewCarForm({ ...newCarForm, preferredFilter: e.target.value })}
+                      className="w-full bg-white border border-emerald-300 rounded-xl px-3 py-2 text-slate-950 font-black"
+                    />
+                  </div>
+                </div>
               </div>
+
               <button type="submit" className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl text-base">
                 حفظ السيارة
               </button>

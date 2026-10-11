@@ -5,7 +5,6 @@ import {
   getDocs,
   query,
   where,
-  orderBy,
   runTransaction,
   serverTimestamp,
   addDoc,
@@ -23,14 +22,70 @@ import {
   DebtPaymentDoc
 } from '@/types/firestore';
 
+// Helper to get raw timestamp in ms for accurate sorting
+export function getRawDateMillis(ts: any): number {
+  if (!ts) return 0;
+  if (typeof ts === 'string') {
+    const t = new Date(ts).getTime();
+    return isNaN(t) ? 0 : t;
+  }
+  if (ts.toDate && typeof ts.toDate === 'function') {
+    return ts.toDate().getTime();
+  }
+  if (ts.seconds) {
+    return ts.seconds * 1000;
+  }
+  return 0;
+}
+
+// Helper to format Firestore Timestamp or ISO date into Arabic readable date + time
+export function formatExactDateTime(ts: any): string {
+  if (!ts) return '—';
+  try {
+    if (typeof ts === 'string') {
+      const d = new Date(ts);
+      if (!isNaN(d.getTime())) return d.toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+      return ts;
+    }
+    if (ts.toDate && typeof ts.toDate === 'function') {
+      return ts.toDate().toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+    }
+    if (ts.seconds) {
+      return new Date(ts.seconds * 1000).toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+    }
+    return new Date().toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+  } catch {
+    return '—';
+  }
+}
+
 // ==============================================================================
-// 1. FAST PARALLEL SEARCH CUSTOMER OR VEHICLE
-// Runs phone, plate, and name queries concurrently via Promise.all for instant speed
+// 0. GET LAST SERVICE VISIT FOR A SPECIFIC VEHICLE
+// ==============================================================================
+export async function getLastVisitForVehicle(vehicleId: string): Promise<ServiceVisitDoc | null> {
+  if (!vehicleId) return null;
+  try {
+    const visitSnap = await getDocs(
+      query(collection(db, 'service_visits'), where('vehicleId', '==', vehicleId))
+    );
+    if (visitSnap.empty) return null;
+    const visits = visitSnap.docs.map(d => ({ id: d.id, ...d.data() } as ServiceVisitDoc));
+    visits.sort((a, b) => getRawDateMillis(b.visitDate) - getRawDateMillis(a.visitDate));
+    return visits[0] || null;
+  } catch (err) {
+    console.warn('Error fetching last visit for vehicle:', err);
+    return null;
+  }
+}
+
+// ==============================================================================
+// 1. FAST PARALLEL SEARCH CUSTOMER OR VEHICLE (Returns Customer + Vehicles + Last Visit)
 // ==============================================================================
 export async function searchCustomerOrVehicle(queryStr: string): Promise<{
   customer: CustomerDoc;
   vehicles: VehicleDoc[];
   vehicle: VehicleDoc | null;
+  lastVisit: ServiceVisitDoc | null;
 } | null> {
   const cleanQuery = queryStr.trim();
   if (!cleanQuery) return null;
@@ -58,21 +113,24 @@ export async function searchCustomerOrVehicle(queryStr: string): Promise<{
       const customerData = { id: customerDoc.id, ...customerDoc.data() } as CustomerDoc;
       const vehSnap = await getDocs(query(vehiclesRef, where('customerId', '==', customerDoc.id)));
       const vehicles = vehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
-      return { customer: customerData, vehicles, vehicle: vehicles[0] || null };
+      const firstVeh = vehicles[0] || null;
+      const lastVisit = firstVeh?.id ? await getLastVisitForVehicle(firstVeh.id) : null;
+      return { customer: customerData, vehicles, vehicle: firstVeh, lastVisit };
     }
 
     // 2. Match by Plate Number
     if (!plateSnap.empty) {
       const matchedVehDoc = plateSnap.docs[0];
       const matchedVehicle = { id: matchedVehDoc.id, ...matchedVehDoc.data() } as VehicleDoc;
-      const [customerSnap, allVehSnap] = await Promise.all([
+      const [customerSnap, allVehSnap, lastVisit] = await Promise.all([
         getDoc(doc(db, 'customers', matchedVehicle.customerId)),
-        getDocs(query(vehiclesRef, where('customerId', '==', matchedVehicle.customerId)))
+        getDocs(query(vehiclesRef, where('customerId', '==', matchedVehicle.customerId))),
+        getLastVisitForVehicle(matchedVehDoc.id)
       ]);
       if (customerSnap.exists()) {
         const customerData = { id: customerSnap.id, ...customerSnap.data() } as CustomerDoc;
         const vehicles = allVehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
-        return { customer: customerData, vehicles, vehicle: matchedVehicle };
+        return { customer: customerData, vehicles, vehicle: matchedVehicle, lastVisit };
       }
     }
 
@@ -82,7 +140,9 @@ export async function searchCustomerOrVehicle(queryStr: string): Promise<{
       const customerData = { id: customerDoc.id, ...customerDoc.data() } as CustomerDoc;
       const vehSnap = await getDocs(query(vehiclesRef, where('customerId', '==', customerDoc.id)));
       const vehicles = vehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
-      return { customer: customerData, vehicles, vehicle: vehicles[0] || null };
+      const firstVeh = vehicles[0] || null;
+      const lastVisit = firstVeh?.id ? await getLastVisitForVehicle(firstVeh.id) : null;
+      return { customer: customerData, vehicles, vehicle: firstVeh, lastVisit };
     }
 
     return null;
@@ -93,7 +153,7 @@ export async function searchCustomerOrVehicle(queryStr: string): Promise<{
 }
 
 // ==============================================================================
-// 1.1 CREATE NEW CUSTOMER WITH VEHICLE (أو إضافة سيارة لزبون موجود)
+// 1.1 CREATE NEW CUSTOMER WITH VEHICLE (مع مواصفات الزيت والفلتر الاختيارية للسيارة)
 // ==============================================================================
 export async function createCustomerWithVehicle(data: {
   fullName: string;
@@ -103,6 +163,8 @@ export async function createCustomerWithVehicle(data: {
   engineSize: string;
   modelYear: number;
   lastOdometer?: number;
+  recommendedLiters?: number;
+  preferredOilName?: string;
   preferredOil?: string;
   preferredFilter?: string;
 }) {
@@ -115,6 +177,8 @@ export async function createCustomerWithVehicle(data: {
       engineSize,
       modelYear,
       lastOdometer,
+      recommendedLiters,
+      preferredOilName,
       preferredOil,
       preferredFilter
     } = data;
@@ -143,18 +207,26 @@ export async function createCustomerWithVehicle(data: {
 
     const qrCodeId = `${plateNumber.replace(/\s+/g, '-').replace(/[^\w-]/g, '')}-${Date.now().toString().slice(-4)}`;
 
-    const vehRef = await addDoc(collection(db, 'vehicles'), {
+    const vehPayload = {
       customerId,
       makeModel: makeModel.trim(),
       plateNumber: plateNumber.trim(),
-      engineSize: engineSize.trim(),
+      engineSize: (engineSize || '').trim(),
       modelYear: Number(modelYear) || new Date().getFullYear(),
       lastOdometer: Number(lastOdometer) || 0,
       nextOdometer: (Number(lastOdometer) || 0) + 3000,
-      lastServiceDate: serverTimestamp(),
-      preferredOil: preferredOil || '',
-      preferredFilter: preferredFilter || '',
+      lastServiceDate: null,
+      recommendedLiters: recommendedLiters ? Number(recommendedLiters) : undefined,
+      preferredOilName: (preferredOilName || '').trim(),
+      preferredOil: (preferredOil || '').trim(),
+      preferredFilter: (preferredFilter || '').trim(),
       qrCodeId
+    };
+
+    const vehRef = await addDoc(collection(db, 'vehicles'), {
+      ...vehPayload,
+      recommendedLiters: vehPayload.recommendedLiters || null,
+      createdAt: serverTimestamp()
     });
 
     const createdCustomer: CustomerDoc = {
@@ -168,20 +240,9 @@ export async function createCustomerWithVehicle(data: {
 
     const createdVehicle: VehicleDoc = {
       id: vehRef.id,
-      customerId,
-      makeModel: makeModel.trim(),
-      plateNumber: plateNumber.trim(),
-      engineSize: engineSize.trim(),
-      modelYear: Number(modelYear) || new Date().getFullYear(),
-      lastOdometer: Number(lastOdometer) || 0,
-      nextOdometer: (Number(lastOdometer) || 0) + 3000,
-      lastServiceDate: new Date().toISOString(),
-      preferredOil: preferredOil || '',
-      preferredFilter: preferredFilter || '',
-      qrCodeId
+      ...vehPayload
     };
 
-    // Fetch all vehicles for this customer
     const allVehSnap = await getDocs(
       query(collection(db, 'vehicles'), where('customerId', '==', customerId))
     );
@@ -200,7 +261,7 @@ export async function createCustomerWithVehicle(data: {
 }
 
 // ==============================================================================
-// 1.2 ADD ADDITIONAL VEHICLE TO EXISTING CUSTOMER (إضافة سيارة ثانية لنفس الزبون)
+// 1.2 ADD ADDITIONAL VEHICLE TO EXISTING CUSTOMER (إضافة سيارة أخرى لنفس الزبون)
 // ==============================================================================
 export async function addVehicleToCustomer(data: {
   customerId: string;
@@ -209,6 +270,8 @@ export async function addVehicleToCustomer(data: {
   engineSize: string;
   modelYear: number;
   lastOdometer?: number;
+  recommendedLiters?: number;
+  preferredOilName?: string;
   preferredOil?: string;
   preferredFilter?: string;
 }) {
@@ -220,39 +283,39 @@ export async function addVehicleToCustomer(data: {
       engineSize,
       modelYear,
       lastOdometer,
+      recommendedLiters,
+      preferredOilName,
       preferredOil,
       preferredFilter
     } = data;
 
     const qrCodeId = `${plateNumber.replace(/\s+/g, '-').replace(/[^\w-]/g, '')}-${Date.now().toString().slice(-4)}`;
 
-    const vehRef = await addDoc(collection(db, 'vehicles'), {
+    const vehPayload = {
       customerId,
       makeModel: makeModel.trim(),
       plateNumber: plateNumber.trim(),
-      engineSize: engineSize.trim(),
+      engineSize: (engineSize || '').trim(),
       modelYear: Number(modelYear) || new Date().getFullYear(),
       lastOdometer: Number(lastOdometer) || 0,
       nextOdometer: (Number(lastOdometer) || 0) + 3000,
-      lastServiceDate: serverTimestamp(),
-      preferredOil: preferredOil || '',
-      preferredFilter: preferredFilter || '',
+      lastServiceDate: null,
+      recommendedLiters: recommendedLiters ? Number(recommendedLiters) : undefined,
+      preferredOilName: (preferredOilName || '').trim(),
+      preferredOil: (preferredOil || '').trim(),
+      preferredFilter: (preferredFilter || '').trim(),
       qrCodeId
+    };
+
+    const vehRef = await addDoc(collection(db, 'vehicles'), {
+      ...vehPayload,
+      recommendedLiters: vehPayload.recommendedLiters || null,
+      createdAt: serverTimestamp()
     });
 
     const newVehicle: VehicleDoc = {
       id: vehRef.id,
-      customerId,
-      makeModel: makeModel.trim(),
-      plateNumber: plateNumber.trim(),
-      engineSize: engineSize.trim(),
-      modelYear: Number(modelYear) || new Date().getFullYear(),
-      lastOdometer: Number(lastOdometer) || 0,
-      nextOdometer: (Number(lastOdometer) || 0) + 3000,
-      lastServiceDate: new Date().toISOString(),
-      preferredOil: preferredOil || '',
-      preferredFilter: preferredFilter || '',
-      qrCodeId
+      ...vehPayload
     };
 
     return { success: true, vehicle: newVehicle };
@@ -275,11 +338,16 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
     oilName,
     viscosity,
     oilLitersUsed,
+    oilUnitPrice,
+    oilTotalPrice,
     filterCode,
+    filterPrice,
     gearOilProductId,
     gearOilName,
     gearOilViscosity,
     gearOilLitersUsed,
+    gearOilUnitPrice,
+    gearOilTotalPrice,
     gearOilDetails,
     technicalNotes,
     totalPrice,
@@ -350,7 +418,7 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       });
     }
 
-    // 3.b Write: Deduct Gear Oil stock
+    // 3.b Write: Deduct Gear Oil stock (in Liters)
     if (gearRef && gearLiters > 0) {
       const newGearStock = Number((currentGearStock - gearLiters).toFixed(2));
       transaction.update(gearRef, {
@@ -370,11 +438,16 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       oilName,
       viscosity: viscosity || '',
       oilLitersUsed,
+      oilUnitPrice: Number(oilUnitPrice || 0),
+      oilTotalPrice: Number(oilTotalPrice || 0),
       filterCode: filterCode || '',
+      filterPrice: Number(filterPrice || 0),
       gearOilProductId: gearOilProductId || null,
       gearOilName: gearOilName || '',
       gearOilViscosity: gearOilViscosity || '',
       gearOilLitersUsed: gearLiters,
+      gearOilUnitPrice: Number(gearOilUnitPrice || 0),
+      gearOilTotalPrice: Number(gearOilTotalPrice || 0),
       gearOilDetails: gearOilDetails || '',
       technicalNotes: technicalNotes || '',
       totalPrice,
@@ -382,12 +455,14 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       debtAmount
     });
 
-    // 5. Write: Update Vehicle odometer & service timestamp
+    // 5. Write: Update Vehicle odometer & save last used oil/liters/filter for future reference
     transaction.update(vehicleRef, {
       lastOdometer: currentOdometer,
       nextOdometer: nextOdometer,
       lastServiceDate: serverTimestamp(),
+      ...(oilName ? { preferredOilName: oilName } : {}),
       ...(viscosity ? { preferredOil: viscosity } : {}),
+      ...(oilLitersUsed ? { recommendedLiters: oilLitersUsed } : {}),
       ...(filterCode ? { preferredFilter: filterCode } : {})
     });
 
@@ -400,6 +475,8 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       totalDebt: currentCustomerDebt + (debtAmount > 0 ? debtAmount : 0),
       loyaltyPoints: currentLoyalty + 10
     });
+
+    cachedProducts = null;
 
     return {
       success: true,
@@ -465,6 +542,8 @@ export async function recordDirectSale(saleData: Omit<DirectSaleDoc, 'id' | 'sal
       });
     }
 
+    cachedProducts = null;
+
     return { success: true, saleId: saleRef.id };
   });
 }
@@ -481,26 +560,20 @@ export async function getCustomerDossier(customerId: string) {
 
     const customer = { id: customerSnap.id, ...customerSnap.data() } as CustomerDoc;
 
-    const vehQuery = query(collection(db, 'vehicles'), where('customerId', '==', customerId));
-    const vehSnap = await getDocs(vehQuery);
+    const [vehSnap, visitsSnap, paymentsSnap] = await Promise.all([
+      getDocs(query(collection(db, 'vehicles'), where('customerId', '==', customerId))),
+      getDocs(query(collection(db, 'service_visits'), where('customerId', '==', customerId))),
+      getDocs(query(collection(db, 'debt_payments'), where('customerId', '==', customerId)))
+    ]);
+
     const vehicles: VehicleDoc[] = vehSnap.docs.map(
       (d) => ({ id: d.id, ...d.data() } as VehicleDoc)
     );
 
-    const visitsQuery = query(
-      collection(db, 'service_visits'),
-      where('customerId', '==', customerId)
-    );
-    const visitsSnap = await getDocs(visitsQuery);
-    const history: ServiceVisitDoc[] = visitsSnap.docs.map(
-      (d) => ({ id: d.id, ...d.data() } as ServiceVisitDoc)
-    );
+    const history: ServiceVisitDoc[] = visitsSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as ServiceVisitDoc))
+      .sort((a, b) => getRawDateMillis(b.visitDate) - getRawDateMillis(a.visitDate));
 
-    const paymentsQuery = query(
-      collection(db, 'debt_payments'),
-      where('customerId', '==', customerId)
-    );
-    const paymentsSnap = await getDocs(paymentsQuery);
     const debtPayments: DebtPaymentDoc[] = paymentsSnap.docs.map(
       (d) => ({ id: d.id, ...d.data() } as DebtPaymentDoc)
     );
@@ -535,16 +608,7 @@ export async function getVehicleByQrCode(qrCodeId: string) {
 
     const vehDoc = vehSnap.docs[0];
     const vehicle = { id: vehDoc.id, ...vehDoc.data() } as VehicleDoc;
-
-    const visitQuery = query(
-      collection(db, 'service_visits'),
-      where('vehicleId', '==', vehicle.id),
-      limit(1)
-    );
-    const visitSnap = await getDocs(visitQuery);
-    const lastVisit = !visitSnap.empty
-      ? ({ id: visitSnap.docs[0].id, ...visitSnap.docs[0].data() } as ServiceVisitDoc)
-      : null;
+    const lastVisit = await getLastVisitForVehicle(vehicle.id!);
 
     return {
       vehicle,
@@ -589,134 +653,22 @@ export async function recordDebtPayment(customerId: string, amountPaid: number, 
 }
 
 // ==============================================================================
-// 7. GET ALL PRODUCTS (With Dual Pricing, Multi-Sizes, Carton/Piece/Liter info)
+// 7. GET ALL PRODUCTS (NO DUMMY SEEDING + AUTO-PURGE OLD SEEDED MOCK ITEMS)
 // ==============================================================================
-const DEFAULT_INITIAL_PRODUCTS: Omit<ProductDoc, 'id'>[] = [
-  {
-    name: 'زيت يورال الأصلي (Eural Motor Oil)',
-    category: 'engine_oil',
-    availableSizes: ['10W30', '10W40', '20W50', '5W30'],
-    viscosity: '10W40',
-    cartonsCount: 5,
-    piecesPerCarton: 4,
-    packageSizeLiters: 4,
-    totalPiecesStock: 20,
-    totalLitersStock: 80.0,
-    unitCost: 8500,
-    directSalePrice: 11000,
-    serviceSalePrice: 12500,
-    salePrice: 12500
-  },
-  {
-    name: 'Mobil 1 ESP (تخليقي بالكامل)',
-    category: 'engine_oil',
-    availableSizes: ['5W30', '0W20', '5W40'],
-    viscosity: '5W30',
-    cartonsCount: 3,
-    piecesPerCarton: 4,
-    packageSizeLiters: 4,
-    totalPiecesStock: 12,
-    totalLitersStock: 48.0,
-    unitCost: 10000,
-    directSalePrice: 13000,
-    serviceSalePrice: 14500,
-    salePrice: 14500
-  },
-  {
-    name: 'Castrol Magnatec',
-    category: 'engine_oil',
-    availableSizes: ['10W40', '5W30', '20W50'],
-    viscosity: '10W40',
-    cartonsCount: 4,
-    piecesPerCarton: 6,
-    packageSizeLiters: 4,
-    totalPiecesStock: 24,
-    totalLitersStock: 96.0,
-    unitCost: 7500,
-    directSalePrice: 9500,
-    serviceSalePrice: 11000,
-    salePrice: 11000
-  },
-  {
-    name: 'زيت قير تويوتا وهونداي (ATF / CVT)',
-    category: 'gear_oil',
-    availableSizes: ['ATF WS', 'ATF SP-IV', 'CVT FE', '75W90'],
-    viscosity: 'ATF WS',
-    cartonsCount: 2,
-    piecesPerCarton: 6,
-    packageSizeLiters: 4,
-    totalPiecesStock: 12,
-    totalLitersStock: 48.0,
-    unitCost: 11000,
-    directSalePrice: 14000,
-    serviceSalePrice: 16000,
-    salePrice: 16000
-  },
-  {
-    name: 'فلتر زيت أصلي (تويوتا / كيا / هونداي)',
-    category: 'filter',
-    availableSizes: ['90915-YZZE2', '26300-35505', '90915-YZZD4'],
-    viscosity: '90915-YZZE2',
-    cartonsCount: 2,
-    piecesPerCarton: 20,
-    packageSizeLiters: 1,
-    totalPiecesStock: 40,
-    totalLitersStock: 40,
-    unitCost: 4000,
-    directSalePrice: 6000,
-    serviceSalePrice: 7500,
-    salePrice: 7500
-  },
-  {
-    name: 'ماء راديتر بريستون أمريكي 50/50',
-    category: 'coolant',
-    availableSizes: ['أحمر Red', 'أخضر Green'],
-    viscosity: 'أحمر Red',
-    cartonsCount: 3,
-    piecesPerCarton: 6,
-    packageSizeLiters: 4,
-    totalPiecesStock: 18,
-    totalLitersStock: 72.0,
-    unitCost: 10000,
-    directSalePrice: 13500,
-    serviceSalePrice: 15000,
-    salePrice: 15000
-  },
-  {
-    name: 'فلاش غسيل محرك (Engine Flush)',
-    category: 'flush',
-    availableSizes: ['300ml', '500ml'],
-    viscosity: '300ml',
-    cartonsCount: 2,
-    piecesPerCarton: 12,
-    packageSizeLiters: 1,
-    totalPiecesStock: 24,
-    totalLitersStock: 24,
-    unitCost: 5000,
-    directSalePrice: 7500,
-    serviceSalePrice: 9000,
-    salePrice: 9000
-  },
-  {
-    name: 'مانع تبخير وتنقيص زيت (Stop Smoke)',
-    category: 'anti_smoke',
-    availableSizes: ['350ml', '500ml'],
-    viscosity: '350ml',
-    cartonsCount: 2,
-    piecesPerCarton: 12,
-    packageSizeLiters: 1,
-    totalPiecesStock: 24,
-    totalLitersStock: 24,
-    unitCost: 6000,
-    directSalePrice: 9000,
-    serviceSalePrice: 10000,
-    salePrice: 10000
-  }
-];
+const OLD_SEEDED_MOCK_NAMES = new Set([
+  'زيت يورال الأصلي (Eural Motor Oil)',
+  'Mobil 1 ESP (تخليقي بالكامل)',
+  'Castrol Magnatec',
+  'زيت قير تويوتا وهونداي (ATF / CVT)',
+  'فلتر زيت أصلي (تويوتا / كيا / هونداي)',
+  'ماء راديتر بريستون أمريكي 50/50',
+  'فلاش غسيل محرك (Engine Flush)',
+  'مانع تبخير وتنقيص زيت (Stop Smoke)'
+]);
 
-// In-memory cache for ultra-fast POS switching
 let cachedProducts: ProductDoc[] | null = null;
 let lastProductsFetch = 0;
+let mockCleanupDone = false;
 
 export async function getProductsList(forceRefresh = false): Promise<ProductDoc[]> {
   const now = Date.now();
@@ -726,23 +678,26 @@ export async function getProductsList(forceRefresh = false): Promise<ProductDoc[
 
   try {
     const productsSnap = await getDocs(collection(db, 'products'));
-    if (productsSnap.empty) {
-      const seeded: ProductDoc[] = [];
-      for (const item of DEFAULT_INITIAL_PRODUCTS) {
-        const docRef = await addDoc(collection(db, 'products'), {
-          ...item,
-          createdAt: serverTimestamp()
-        });
-        seeded.push({ id: docRef.id, ...item });
+    const realProducts: ProductDoc[] = [];
+
+    for (const d of productsSnap.docs) {
+      const data = d.data() as ProductDoc;
+      // Automatically delete any old auto-seeded mock products from Firestore
+      if (!mockCleanupDone && OLD_SEEDED_MOCK_NAMES.has(data.name)) {
+        try {
+          await deleteDoc(doc(db, 'products', d.id));
+          continue;
+        } catch {
+          // ignore if delete fails
+        }
       }
-      cachedProducts = seeded;
-      lastProductsFetch = Date.now();
-      return seeded;
+      realProducts.push({ id: d.id, ...data });
     }
-    const list = productsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as ProductDoc));
-    cachedProducts = list;
+
+    mockCleanupDone = true;
+    cachedProducts = realProducts;
     lastProductsFetch = Date.now();
-    return list;
+    return realProducts;
   } catch (error) {
     console.error('Error in getProductsList:', error);
     return cachedProducts || [];
@@ -755,7 +710,7 @@ export async function addProduct(product: Omit<ProductDoc, 'id'>) {
       ...product,
       createdAt: serverTimestamp()
     });
-    cachedProducts = null; // invalidate cache
+    cachedProducts = null;
     return { success: true, id: docRef.id };
   } catch (error) {
     console.error('Error in addProduct:', error);
@@ -854,40 +809,4 @@ export async function getWorkshopReportsData() {
       vehicles: []
     };
   }
-}
-
-// Helper to format Firestore Timestamp or ISO date into Arabic readable date + time
-export function formatExactDateTime(ts: any): string {
-  if (!ts) return new Date().toLocaleString('ar-IQ');
-  try {
-    if (typeof ts === 'string') {
-      const d = new Date(ts);
-      if (!isNaN(d.getTime())) return d.toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
-      return ts;
-    }
-    if (ts.toDate && typeof ts.toDate === 'function') {
-      return ts.toDate().toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
-    }
-    if (ts.seconds) {
-      return new Date(ts.seconds * 1000).toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
-    }
-    return new Date().toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
-  } catch {
-    return new Date().toLocaleString('ar-IQ');
-  }
-}
-
-export function getRawDateMillis(ts: any): number {
-  if (!ts) return Date.now();
-  if (typeof ts === 'string') {
-    const t = new Date(ts).getTime();
-    return isNaN(t) ? Date.now() : t;
-  }
-  if (ts.toDate && typeof ts.toDate === 'function') {
-    return ts.toDate().getTime();
-  }
-  if (ts.seconds) {
-    return ts.seconds * 1000;
-  }
-  return Date.now();
 }

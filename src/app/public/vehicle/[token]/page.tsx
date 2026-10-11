@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react';
 import { 
   Car, 
   Gauge, 
-  Droplet, 
   Phone, 
   MapPin, 
   ShieldCheck, 
@@ -13,7 +12,8 @@ import {
   Navigation,
   ExternalLink,
   X,
-  Loader2
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 import IraqiPlateBadge from '@/components/IraqiPlateBadge';
 import { getVehicleByQrCode, formatExactDateTime } from '@/services/firestoreService';
@@ -50,27 +50,20 @@ export default function VehiclePublicStatusPage({
     load();
   }, [qrCodeId]);
 
-  const displayVehicle = vehicle || {
-    makeModel: 'تويوتا كامري (Toyota Camry)',
-    plateNumber: 'بغداد 48291 أ',
-    engineSize: '2.5L 4-سلندر',
-    modelYear: 2022,
-    lastOdometer: 71350,
-    nextOdometer: 74350,
-    preferredOil: '10W40 / 5W30',
-    preferredFilter: '90915-YZZE2'
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950 flex flex-col items-center justify-start p-4 py-8 antialiased">
       <div className="max-w-md w-full space-y-5">
         
-        {/* Workshop Header Card */}
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-lg shadow-amber-500/25 font-black">
-            <Droplet className="w-9 h-9 fill-current" />
+        {/* Workshop Header Card with Official Logo */}
+        <div className="text-center space-y-2.5">
+          <div className="inline-flex items-center justify-center w-24 h-24 rounded-3xl overflow-hidden border-2 border-amber-500 bg-slate-950 shadow-xl shadow-amber-500/25">
+            <img
+              src="/logo.jpg"
+              alt="شعار مركز حسين الأسدي"
+              className="w-full h-full object-cover"
+            />
           </div>
-          <h1 className="text-2xl sm:text-3xl font-black tracking-wide text-slate-950">مركز حسين الاسدي</h1>
+          <h1 className="text-2xl sm:text-3xl font-black tracking-wide text-slate-950">مركز حسين الأسدي</h1>
           <p className="text-sm text-amber-800 font-black">
             بطاقة الفحص ومتابعة تبديل الزيت الإلكترونية
           </p>
@@ -80,6 +73,14 @@ export default function VehiclePublicStatusPage({
           <div className="bg-white border-2 border-slate-200 rounded-3xl p-10 text-center space-y-3 shadow-md">
             <Loader2 className="w-8 h-8 animate-spin text-amber-600 mx-auto" />
             <p className="font-black text-base text-slate-700">جاري تحميل بيانات البطاقة الإلكترونية للسيارة...</p>
+          </div>
+        ) : !vehicle ? (
+          <div className="bg-white border-2 border-slate-200 rounded-3xl p-8 text-center space-y-3 shadow-md">
+            <AlertCircle className="w-10 h-10 text-amber-600 mx-auto" />
+            <h2 className="text-lg font-black text-slate-950">لم يتم العثور على بيانات هذه البطاقة</h2>
+            <p className="text-sm font-bold text-slate-600">
+              يرجى مراجعة مركز حسين الأسدي لتحديث ملصق الـ QR الخاص بسيارتك.
+            </p>
           </div>
         ) : (
           <>
@@ -93,13 +94,13 @@ export default function VehiclePublicStatusPage({
                     <Car className="w-7 h-7" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-black text-slate-950">{displayVehicle.makeModel}</h2>
+                    <h2 className="text-lg font-black text-slate-950">{vehicle.makeModel}</h2>
                     <p className="text-xs font-bold text-slate-600 font-mono">
-                      {displayVehicle.engineSize || 'محرك بنزين'} | موديل {displayVehicle.modelYear}
+                      {vehicle.engineSize || 'محرك بنزين'} | موديل {vehicle.modelYear}
                     </p>
                   </div>
                 </div>
-                <IraqiPlateBadge plateNumber={displayVehicle.plateNumber} size="md" />
+                <IraqiPlateBadge plateNumber={vehicle.plateNumber} size="md" />
               </div>
 
               {/* Critical Next Due Service Display */}
@@ -108,10 +109,11 @@ export default function VehiclePublicStatusPage({
                   موعد الاستحقاق القادم لتبديل الزيت
                 </span>
                 <div className="text-3xl sm:text-4xl font-black font-mono text-amber-600">
-                  {displayVehicle.nextOdometer?.toLocaleString()} <span className="text-base font-sans font-black text-slate-800">كم</span>
+                  {vehicle.nextOdometer?.toLocaleString()} <span className="text-base font-sans font-black text-slate-800">كم</span>
                 </div>
                 <p className="text-sm text-emerald-800 font-black">
-                  العيار الموصى به: {displayVehicle.preferredOil || '10W40'}
+                  العيار الموصى به: {lastVisit?.viscosity || vehicle.preferredOil || 'قياسي'}
+                  {vehicle.recommendedLiters ? ` (${vehicle.recommendedLiters} لتر)` : ''}
                 </p>
               </div>
 
@@ -132,7 +134,7 @@ export default function VehiclePublicStatusPage({
                   <span className="text-slate-600 flex items-center gap-1.5 font-black">
                     <Gauge className="w-4 h-4 text-amber-600" /> عداد آخر تبديل:
                   </span>
-                  <span className="font-mono font-black text-slate-950">{displayVehicle.lastOdometer?.toLocaleString()} كم</span>
+                  <span className="font-mono font-black text-slate-950">{vehicle.lastOdometer?.toLocaleString()} كم</span>
                 </div>
 
                 {lastVisit && (
@@ -148,69 +150,71 @@ export default function VehiclePublicStatusPage({
                     {lastVisit.gearOilName && (
                       <div className="flex justify-between py-2 border-b border-slate-100">
                         <span className="text-slate-600 font-black">زيت الكير:</span>
-                        <span className="font-black text-amber-800">{lastVisit.gearOilName} ({lastVisit.gearOilViscosity})</span>
+                        <span className="font-black text-amber-800">
+                          {lastVisit.gearOilName} ({lastVisit.gearOilViscosity}) - {lastVisit.gearOilLitersUsed || 1} لتر
+                        </span>
                       </div>
                     )}
                   </>
                 )}
               </div>
             </div>
-
-            {/* Workshop Location & Navigation Card */}
-            <div className="bg-white border-2 border-amber-300 rounded-3xl p-5 shadow-md space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-black text-slate-950 flex items-center gap-2">
-                  <MapPin className="w-5 h-5 text-red-600" />
-                  <span>موقع مركز حسين الاسدي على الخريطة</span>
-                </h3>
-              </div>
-
-              <p className="text-xs font-bold text-slate-600">
-                اضغط على الزر أدناه لاختيار تطبيق الملاحة المفضل لديك (خرائط كوكل، تطبيق Waze، أو خرائط آبل) للوصول المباشر إلى الورشة:
-              </p>
-
-              <button
-                type="button"
-                onClick={() => setMapPickerOpen(true)}
-                className="w-full py-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-2xl font-black text-base flex items-center justify-center gap-2.5 shadow-md shadow-amber-500/20 transition"
-              >
-                <Navigation className="w-5 h-5" />
-                <span>فتح موقع الورشة على الخريطة (Google / Waze)</span>
-              </button>
-            </div>
-
-            {/* Workshop Contact & Direct Links */}
-            <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-md space-y-3">
-              <h3 className="text-sm font-black text-slate-950 flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-emerald-600" />
-                <span>للتواصل المباشر مع مركز حسين الاسدي</span>
-              </h3>
-
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                <a
-                  href="https://wa.me/9647800505015"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-sm transition shadow-sm"
-                >
-                  <MessageCircle className="w-5 h-5" />
-                  <span>واتساب الورشة</span>
-                </a>
-
-                <a
-                  href="tel:07800505015"
-                  className="flex items-center justify-center gap-2 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-950 rounded-xl font-black text-sm transition border-2 border-slate-300"
-                >
-                  <Phone className="w-5 h-5 text-amber-600" />
-                  <span>اتصال: 07800505015</span>
-                </a>
-              </div>
-            </div>
           </>
         )}
 
+        {/* Workshop Location & Navigation Card */}
+        <div className="bg-white border-2 border-amber-300 rounded-3xl p-5 shadow-md space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-black text-slate-950 flex items-center gap-2">
+              <MapPin className="w-5 h-5 text-red-600" />
+              <span>موقع مركز حسين الأسدي على الخريطة</span>
+            </h3>
+          </div>
+
+          <p className="text-xs font-bold text-slate-600">
+            اضغط على الزر أدناه لاختيار تطبيق الملاحة المفضل لديك (خرائط كوكل، تطبيق Waze، أو خرائط آبل) للوصول المباشر إلى الورشة:
+          </p>
+
+          <button
+            type="button"
+            onClick={() => setMapPickerOpen(true)}
+            className="w-full py-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-2xl font-black text-base flex items-center justify-center gap-2.5 shadow-md shadow-amber-500/20 transition"
+          >
+            <Navigation className="w-5 h-5" />
+            <span>فتح موقع الورشة على الخريطة (Google / Waze)</span>
+          </button>
+        </div>
+
+        {/* Workshop Contact & Direct Links */}
+        <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 shadow-md space-y-3">
+          <h3 className="text-sm font-black text-slate-950 flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-emerald-600" />
+            <span>للتواصل المباشر مع مركز حسين الأسدي</span>
+          </h3>
+
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <a
+              href="https://wa.me/9647800505015"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-sm transition shadow-sm"
+            >
+              <MessageCircle className="w-5 h-5" />
+              <span>واتساب الورشة</span>
+            </a>
+
+            <a
+              href="tel:07800505015"
+              className="flex items-center justify-center gap-2 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-950 rounded-xl font-black text-sm transition border-2 border-slate-300"
+            >
+              <Phone className="w-5 h-5 text-amber-600" />
+              <span>اتصال: 07800505015</span>
+            </a>
+          </div>
+        </div>
+
         <p className="text-center text-xs text-slate-500 font-bold">
-          تم إنشاء هذه البطاقة إلكترونياً عبر نظام مركز حسين الاسدي الذكي لتبديل الزيوت.
+          تم إنشاء هذه البطاقة إلكترونياً عبر نظام مركز حسين الأسدي الذكي لتبديل الزيوت.
         </p>
 
       </div>
@@ -234,7 +238,7 @@ export default function VehiclePublicStatusPage({
             </div>
 
             <p className="text-xs font-bold text-slate-600">
-              اختر البرنامج الذي تود استخدامه للاتجاه إلى <strong className="text-slate-900">مركز حسين الاسدي</strong>:
+              اختر البرنامج الذي تود استخدامه للاتجاه إلى <strong className="text-slate-900">مركز حسين الأسدي</strong>:
             </p>
 
             <div className="space-y-2.5">
@@ -270,7 +274,7 @@ export default function VehiclePublicStatusPage({
 
               {/* Option 3: Apple Maps / Default System Map */}
               <a
-                href={`https://maps.apple.com/?q=${encodeURIComponent('مركز حسين الاسدي')}&ll=33.3152,44.3661`}
+                href={`https://maps.apple.com/?q=${encodeURIComponent('مركز حسين الأسدي')}&ll=33.3152,44.3661`}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => {
