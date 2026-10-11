@@ -560,9 +560,10 @@ export async function getCustomerDossier(customerId: string) {
 
     const customer = { id: customerSnap.id, ...customerSnap.data() } as CustomerDoc;
 
-    const [vehSnap, visitsSnap, paymentsSnap] = await Promise.all([
+    const [vehSnap, visitsSnap, salesSnap, paymentsSnap] = await Promise.all([
       getDocs(query(collection(db, 'vehicles'), where('customerId', '==', customerId))),
       getDocs(query(collection(db, 'service_visits'), where('customerId', '==', customerId))),
+      getDocs(query(collection(db, 'direct_sales'), where('customerId', '==', customerId))),
       getDocs(query(collection(db, 'debt_payments'), where('customerId', '==', customerId)))
     ]);
 
@@ -574,14 +575,19 @@ export async function getCustomerDossier(customerId: string) {
       .map((d) => ({ id: d.id, ...d.data() } as ServiceVisitDoc))
       .sort((a, b) => getRawDateMillis(b.visitDate) - getRawDateMillis(a.visitDate));
 
-    const debtPayments: DebtPaymentDoc[] = paymentsSnap.docs.map(
-      (d) => ({ id: d.id, ...d.data() } as DebtPaymentDoc)
-    );
+    const directSales: DirectSaleDoc[] = salesSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as DirectSaleDoc))
+      .sort((a, b) => getRawDateMillis(b.saleDate) - getRawDateMillis(a.saleDate));
+
+    const debtPayments: DebtPaymentDoc[] = paymentsSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as DebtPaymentDoc))
+      .sort((a, b) => getRawDateMillis(b.paymentDate) - getRawDateMillis(a.paymentDate));
 
     return {
       customer,
       vehicles,
       history,
+      directSales,
       debtPayments
     };
   } catch (error) {
@@ -750,8 +756,31 @@ export async function deleteProduct(id: string) {
 // ==============================================================================
 export async function getAllDebtorsSummary() {
   try {
-    const custSnap = await getDocs(collection(db, 'customers'));
-    const allCustomers = custSnap.docs.map(d => ({ id: d.id, ...d.data() } as CustomerDoc));
+    const [custSnap, vehSnap, visitsSnap] = await Promise.all([
+      getDocs(collection(db, 'customers')),
+      getDocs(collection(db, 'vehicles')),
+      getDocs(collection(db, 'service_visits'))
+    ]);
+
+    const allCustomers = custSnap.docs
+      .map(d => ({ id: d.id, ...d.data() } as CustomerDoc))
+      .sort((a, b) => getRawDateMillis(b.createdAt) - getRawDateMillis(a.createdAt));
+
+    const allVehicles = vehSnap.docs.map(d => ({ id: d.id, ...d.data() } as VehicleDoc));
+    const vehiclesByCustomer: Record<string, VehicleDoc[]> = {};
+    allVehicles.forEach(v => {
+      if (!vehiclesByCustomer[v.customerId]) vehiclesByCustomer[v.customerId] = [];
+      vehiclesByCustomer[v.customerId].push(v);
+    });
+
+    const visitsCountByCustomer: Record<string, number> = {};
+    visitsSnap.docs.forEach(d => {
+      const data = d.data() as ServiceVisitDoc;
+      if (data.customerId) {
+        visitsCountByCustomer[data.customerId] = (visitsCountByCustomer[data.customerId] || 0) + 1;
+      }
+    });
+
     const debtors = allCustomers.filter(c => Number(c.totalDebt || 0) > 0);
     const totalDebtSum = debtors.reduce((acc, c) => acc + Number(c.totalDebt || 0), 0);
 
@@ -760,7 +789,9 @@ export async function getAllDebtorsSummary() {
       debtorsCount: debtors.length,
       totalDebtSum,
       debtors,
-      allCustomers
+      allCustomers,
+      vehiclesByCustomer,
+      visitsCountByCustomer
     };
   } catch (error) {
     console.error('Error in getAllDebtorsSummary:', error);
@@ -769,7 +800,9 @@ export async function getAllDebtorsSummary() {
       debtorsCount: 0,
       totalDebtSum: 0,
       debtors: [],
-      allCustomers: []
+      allCustomers: [],
+      vehiclesByCustomer: {} as Record<string, VehicleDoc[]>,
+      visitsCountByCustomer: {} as Record<string, number>
     };
   }
 }

@@ -152,6 +152,23 @@ export default function WorkshopPOSPage() {
             setGearCustomPrice(Math.round(gearPerL * 4));
           }
         }
+
+        // Check if navigated from Customers page with ?phone=...
+        if (typeof window !== 'undefined') {
+          const params = new URLSearchParams(window.location.search);
+          const phoneParam = params.get('phone');
+          if (phoneParam) {
+            setSearchQuery(phoneParam);
+            const result = await searchCustomerOrVehicle(phoneParam);
+            if (result && result.customer) {
+              setCustomer(result.customer);
+              setCustomerVehicles(result.vehicles || []);
+              if (result.vehicle) {
+                applyVehicleAndLastVisitToPOS(result.vehicle, result.lastVisit);
+              }
+            }
+          }
+        }
       } catch (err) {
         console.warn('Firestore products fetch warning:', err);
       }
