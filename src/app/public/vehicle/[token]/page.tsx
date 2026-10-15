@@ -204,6 +204,32 @@ export default function VehiclePublicStatusPage({
                       </div>
                     )}
 
+                    {lastVisit.extraItems && lastVisit.extraItems.length > 0 && (
+                      <div className="bg-white p-2.5 rounded-xl border border-emerald-200 space-y-1">
+                        <span className="text-slate-600 font-black block text-xs">مواد وقطع إضافية:</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {lastVisit.extraItems.map((item, idx) => (
+                            <span key={idx} className="bg-slate-100 text-slate-800 px-2 py-0.5 rounded-lg text-xs font-bold">
+                              • {item.name} {item.size ? `(${item.size})` : ''} ×{item.quantity} ({item.totalPrice.toLocaleString()} د.ع)
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {lastVisit.additionalServices && lastVisit.additionalServices.length > 0 && (
+                      <div className="bg-white p-2.5 rounded-xl border border-amber-200 space-y-1">
+                        <span className="text-amber-950 font-black block text-xs">أعمال وأجور إضافية:</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {lastVisit.additionalServices.map((srv, idx) => (
+                            <span key={idx} className="bg-amber-50 text-amber-900 px-2 py-0.5 rounded-lg text-xs font-bold border border-amber-200">
+                              🔧 {srv.description} ({srv.price.toLocaleString()} د.ع)
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {lastVisit.technicalNotes && (
                       <div className="bg-amber-50 p-3 rounded-xl border border-amber-300 text-xs font-black text-amber-950">
                         🔧 ملاحظات الفحص والعمل المنجز: {lastVisit.technicalNotes}

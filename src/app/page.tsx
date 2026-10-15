@@ -10,11 +10,12 @@ import {
   recordServiceVisit,
   createCustomerWithVehicle,
   addVehicleToCustomer,
+  updateVehicle,
   getProductsList,
   getLastVisitForVehicle,
   formatExactDateTime
 } from '@/services/firestoreService';
-import { CustomerDoc, VehicleDoc, ProductDoc, ServiceVisitDoc } from '@/types/firestore';
+import { CustomerDoc, VehicleDoc, ProductDoc, ServiceVisitDoc, ExtraServiceItem, AdditionalServiceLabor } from '@/types/firestore';
 import { 
   Search, 
   Car, 
@@ -36,7 +37,11 @@ import {
   History,
   Info,
   QrCode,
-  BellRing
+  BellRing,
+  Edit3,
+  Trash2,
+  Package,
+  Wrench
 } from 'lucide-react';
 
 export default function WorkshopPOSPage() {
@@ -79,6 +84,45 @@ export default function WorkshopPOSPage() {
   const [gearPricePerLiter, setGearPricePerLiter] = useState<number>(0);
   const [gearCustomPrice, setGearCustomPrice] = useState<number>(0);
   const [gearOilNotes, setGearOilNotes] = useState<string>('');
+
+  // Extra materials & parts (ماء راديتر، فلتر تبريد، فلتر هواء، بطارية، محسنات، فلاش...)
+  const [extraItems, setExtraItems] = useState<ExtraServiceItem[]>([]);
+  const [newExtraItem, setNewExtraItem] = useState<{
+    productId: string;
+    name: string;
+    size: string;
+    quantity: number;
+    unitPrice: number;
+  }>({
+    productId: '',
+    name: '',
+    size: '',
+    quantity: 1,
+    unitPrice: 0
+  });
+
+  // Additional service / labor fees (أجور عمل / فتح وتنظيف بلكات / فتح كيس الكير...)
+  const [additionalServices, setAdditionalServices] = useState<AdditionalServiceLabor[]>([]);
+  const [newLaborService, setNewLaborService] = useState<{
+    description: string;
+    fee: number;
+  }>({
+    description: '',
+    fee: 0
+  });
+
+  // Quick Edit Active Vehicle Modal State
+  const [quickEditVehicleOpen, setQuickEditVehicleOpen] = useState(false);
+  const [savingVehicleEdit, setSavingVehicleEdit] = useState(false);
+  const [editVehForm, setEditVehForm] = useState({
+    makeModel: '',
+    modelYear: new Date().getFullYear(),
+    engineSize: '',
+    recommendedLiters: '',
+    preferredOil: '',
+    preferredOilName: '',
+    preferredFilter: ''
+  });
 
   // Technical Notes & Financials
   const [techNotes, setTechNotes] = useState<string>('');
@@ -191,10 +235,12 @@ export default function WorkshopPOSPage() {
   useEffect(() => {
     const filterVal = (selectedFilterId || selectedFilterSize.trim()) ? Number(filterCustomPrice || 0) : 0;
     const gearVal = includeGearOil ? Number(gearCustomPrice || 0) : 0;
-    const sum = Number(oilTotalCustomPrice || 0) + filterVal + gearVal;
+    const extraVal = extraItems.reduce((acc, curr) => acc + (Number(curr.totalPrice) || 0), 0);
+    const laborVal = additionalServices.reduce((acc, curr) => acc + (Number(curr.price || curr.fee) || 0), 0);
+    const sum = Number(oilTotalCustomPrice || 0) + filterVal + gearVal + extraVal + laborVal;
     setTotalPrice(sum);
     setPaidAmount(sum);
-  }, [oilTotalCustomPrice, selectedFilterId, selectedFilterSize, filterCustomPrice, includeGearOil, gearCustomPrice]);
+  }, [oilTotalCustomPrice, selectedFilterId, selectedFilterSize, filterCustomPrice, includeGearOil, gearCustomPrice, extraItems, additionalServices]);
 
   // Handlers for Engine Oil Selection & Liters & Per-Liter Price
   const handleSelectOilProduct = (id: string) => {
@@ -319,9 +365,142 @@ export default function WorkshopPOSPage() {
     setOilLiters(4.0);
     setIncludeGearOil(false);
     setGearOilNotes('');
+    setExtraItems([]);
+    setNewExtraItem({ productId: '', name: '', size: '', quantity: 1, unitPrice: 0 });
+    setAdditionalServices([]);
+    setNewLaborService({ description: '', fee: 0 });
     setTechNotes('');
     setErrorMessage(null);
     setSaveSuccessMsg(null);
+  };
+
+  // Quick Edit Active Vehicle Handlers
+  const openQuickEditModal = () => {
+    if (!vehicle) return;
+    setEditVehForm({
+      makeModel: vehicle.makeModel || '',
+      modelYear: vehicle.modelYear || new Date().getFullYear(),
+      engineSize: vehicle.engineSize || '',
+      recommendedLiters: vehicle.recommendedLiters ? String(vehicle.recommendedLiters) : '',
+      preferredOil: vehicle.preferredOil || '',
+      preferredOilName: vehicle.preferredOilName || '',
+      preferredFilter: vehicle.preferredFilter || ''
+    });
+    setQuickEditVehicleOpen(true);
+  };
+
+  const handleSaveQuickEditVehicle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!vehicle?.id) return;
+    setSavingVehicleEdit(true);
+    try {
+      const updates: Partial<VehicleDoc> = {
+        makeModel: editVehForm.makeModel,
+        modelYear: Number(editVehForm.modelYear),
+        engineSize: editVehForm.engineSize,
+        recommendedLiters: editVehForm.recommendedLiters ? Number(editVehForm.recommendedLiters) : undefined,
+        preferredOil: editVehForm.preferredOil,
+        preferredOilName: editVehForm.preferredOilName,
+        preferredFilter: editVehForm.preferredFilter
+      };
+      await updateVehicle(vehicle.id, updates);
+      const updatedVeh: VehicleDoc = { ...vehicle, ...updates };
+      setVehicle(updatedVeh);
+      setCustomerVehicles((prev) => prev.map((v) => (v.id === vehicle.id ? updatedVeh : v)));
+      setQuickEditVehicleOpen(false);
+      setSaveSuccessMsg(`تم تحديث موديل وبيانات السيارة (${updatedVeh.makeModel}) بنجاح!`);
+      setTimeout(() => setSaveSuccessMsg(null), 4000);
+    } catch (err: any) {
+      alert(err.message || 'فشل تحديث بيانات السيارة');
+    } finally {
+      setSavingVehicleEdit(false);
+    }
+  };
+
+  // Extra Materials Handlers
+  const handleSelectExtraProduct = (prodId: string) => {
+    if (!prodId) {
+      setNewExtraItem({ productId: '', name: '', size: '', quantity: 1, unitPrice: 0 });
+      return;
+    }
+    const p = products.find((prod) => prod.id === prodId);
+    if (p) {
+      const price = p.serviceSalePrice || p.salePrice || 0;
+      const size = p.availableSizes?.[0] || p.viscosity || '';
+      setNewExtraItem({
+        productId: p.id,
+        name: p.name,
+        size,
+        quantity: 1,
+        unitPrice: price
+      });
+    }
+  };
+
+  const handleQuickAddExtraShortcut = (name: string, defaultPrice: number = 0) => {
+    const match = products.find(
+      (p) =>
+        p.name.includes(name) ||
+        (name.includes('ماء راديتر') && p.category === 'coolant') ||
+        (name.includes('تبريد') && p.category === 'filter') ||
+        (name.includes('هواء') && p.category === 'filter') ||
+        (name.includes('بطارية') && p.category === 'battery') ||
+        (name.includes('فلاش') && p.category === 'additive') ||
+        (name.includes('محسن') && p.category === 'additive')
+    );
+    setNewExtraItem({
+      productId: match?.id || '',
+      name: match?.name || name,
+      size: match?.availableSizes?.[0] || '',
+      quantity: 1,
+      unitPrice: match ? (match.serviceSalePrice || match.salePrice || 0) : defaultPrice
+    });
+  };
+
+  const handleAddExtraItemToList = () => {
+    if (!newExtraItem.name.trim()) return;
+    const qty = Math.max(0.5, Number(newExtraItem.quantity) || 1);
+    const price = Number(newExtraItem.unitPrice) || 0;
+    const item: ExtraServiceItem = {
+      id: `extra_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      productId: newExtraItem.productId || undefined,
+      name: newExtraItem.name.trim(),
+      size: newExtraItem.size.trim() || undefined,
+      quantity: qty,
+      unitPrice: price,
+      totalPrice: Math.round(qty * price)
+    };
+    setExtraItems((prev) => [...prev, item]);
+    setNewExtraItem({ productId: '', name: '', size: '', quantity: 1, unitPrice: 0 });
+  };
+
+  const handleRemoveExtraItem = (id: string) => {
+    setExtraItems((prev) => prev.filter((i) => i.id !== id));
+  };
+
+  // Additional Services / Labor Handlers
+  const handleQuickAddLaborShortcut = (desc: string, defaultFee: number = 0) => {
+    setNewLaborService({
+      description: desc,
+      fee: defaultFee
+    });
+  };
+
+  const handleAddLaborToList = () => {
+    if (!newLaborService.description.trim()) return;
+    const fee = Number(newLaborService.fee) || 0;
+    const item: AdditionalServiceLabor = {
+      id: `labor_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      description: newLaborService.description.trim(),
+      price: fee,
+      fee: fee
+    };
+    setAdditionalServices((prev) => [...prev, item]);
+    setNewLaborService({ description: '', fee: 0 });
+  };
+
+  const handleRemoveLabor = (id: string) => {
+    setAdditionalServices((prev) => prev.filter((s) => s.id !== id));
   };
 
   // Fast Parallel Search by Phone, Plate, or Name
@@ -481,6 +660,8 @@ export default function WorkshopPOSPage() {
         gearOilUnitPrice: includeGearOil ? Number(gearPricePerLiter) : 0,
         gearOilTotalPrice: includeGearOil ? Number(gearCustomPrice) : 0,
         gearOilDetails: gearOilNotes,
+        extraItems: extraItems.length > 0 ? extraItems : undefined,
+        additionalServices: additionalServices.length > 0 ? additionalServices : undefined,
         technicalNotes: techNotes,
         totalPrice: Number(totalPrice),
         paidAmount: Number(paidAmount),
@@ -519,6 +700,8 @@ export default function WorkshopPOSPage() {
         gearOilName: includeGearOil ? (selectedGear?.name || 'زيت كير') : '',
         gearOilViscosity: includeGearOil ? selectedGearOilSize : '',
         gearOilLitersUsed: includeGearOil ? Number(gearOilLiters) : 0,
+        extraItems: extraItems.length > 0 ? extraItems : undefined,
+        additionalServices: additionalServices.length > 0 ? additionalServices : undefined,
         totalPrice: Number(totalPrice),
         paidAmount: Number(paidAmount),
         debtAmount: calculatedDebt
@@ -548,6 +731,24 @@ export default function WorkshopPOSPage() {
           price: Number(gearCustomPrice)
         });
       }
+
+      // Add extra materials to receipt
+      extraItems.forEach((item) => {
+        receiptItems.push({
+          label: `${item.name}${item.size ? ` (${item.size})` : ''}`,
+          qty: `${item.quantity}`,
+          price: Number(item.totalPrice)
+        });
+      });
+
+      // Add additional labor services to receipt
+      additionalServices.forEach((srv) => {
+        receiptItems.push({
+          label: `أجور عمل: ${srv.description}`,
+          qty: `خدمة`,
+          price: Number(srv.price || srv.fee || 0)
+        });
+      });
 
       setReceiptModalData({
         receiptNumber: `INV-${res.visitId.slice(-6).toUpperCase()}`,
@@ -683,10 +884,21 @@ export default function WorkshopPOSPage() {
                     ) : (
                       <span className="font-black text-slate-950 text-lg block">{vehicle?.makeModel || 'غير محدد'}</span>
                     )}
-                    {vehicle?.engineSize && (
-                      <span className="text-xs font-bold text-slate-600 block">
-                        حجم المحرك: {vehicle.engineSize} | الموديل: {vehicle.modelYear}
-                      </span>
+                    {vehicle && (
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <span className="text-xs font-bold text-slate-700 block">
+                          حجم المحرك: {vehicle.engineSize || '—'} | الموديل / سنة الصنع: <strong>{vehicle.modelYear || '—'}</strong>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={openQuickEditModal}
+                          className="inline-flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-amber-100 text-amber-900 border-2 border-amber-300 rounded-xl text-xs font-black transition shadow-xs"
+                          title="تعديل نوع السيارة وموديلها وسنة صنعها ومواصفاتها"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-amber-600" />
+                          <span>تعديل الموديل والمواصفات</span>
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -1175,6 +1387,285 @@ export default function WorkshopPOSPage() {
               </div>
             </div>
 
+            {/* 4. Extra Materials & Parts (مواد وقطع إضافية: ماء راديتر، فلتر تبريد، فلتر هواء، بطارية، محسنات...) */}
+            <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between border-b-2 border-slate-100 pb-3">
+                <div className="flex items-center gap-2 text-slate-950 font-black text-lg">
+                  <Package className="w-6 h-6 text-amber-600" />
+                  <h2>مواد وقطع إضافية (ماء راديتر، فلتر مكيف/تبريد، فلتر هواء، بطارية، محسنات...)</h2>
+                </div>
+                <span className="text-xs font-black bg-amber-100 text-amber-950 px-2.5 py-1 rounded-xl">
+                  {extraItems.length} مواد مضافة
+                </span>
+              </div>
+
+              {/* Quick Shortcut Buttons */}
+              <div className="space-y-1.5">
+                <span className="text-xs font-black text-slate-600 block">اختصارات سريعة لإضافة المواد:</span>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { label: '+ ماء راديتر', defaultPrice: 5000 },
+                    { label: '+ فلتر تبريد (مكيف)', defaultPrice: 10000 },
+                    { label: '+ فلتر هواء', defaultPrice: 7000 },
+                    { label: '+ بطارية', defaultPrice: 65000 },
+                    { label: '+ فلاش غسيل ماكينة', defaultPrice: 5000 },
+                    { label: '+ محسن زيت / مانع تبخير', defaultPrice: 5000 }
+                  ].map((sc) => (
+                    <button
+                      key={sc.label}
+                      type="button"
+                      onClick={() => handleQuickAddExtraShortcut(sc.label.replace('+ ', ''), sc.defaultPrice)}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-amber-100 hover:text-amber-950 text-slate-800 rounded-xl text-xs font-black border border-slate-300 transition"
+                    >
+                      {sc.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Add Extra Item Inputs */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-black text-slate-800 mb-1">
+                      اختر من المخزون (أو اكتب بالأسفل يدوياً)
+                    </label>
+                    <select
+                      value={newExtraItem.productId}
+                      onChange={(e) => handleSelectExtraProduct(e.target.value)}
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 font-black text-sm"
+                    >
+                      <option value="">— اختر مادة من المخزون —</option>
+                      {products
+                        .filter((p) => p.category !== 'engine_oil' && p.category !== 'gear_oil')
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} {p.viscosity ? `(${p.viscosity})` : ''} - رصيد: {p.totalLitersStock}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-800 mb-1">
+                      اسم المادة أو القطعة *
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="مثال: ماء راديتر أمريكي أحمر"
+                      value={newExtraItem.name}
+                      onChange={(e) => setNewExtraItem({ ...newExtraItem, name: e.target.value })}
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 text-sm font-black focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 items-end">
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 mb-1">الحجم / السايز</label>
+                    <input
+                      type="text"
+                      placeholder="مثال: 4 لتر / 70Ah"
+                      value={newExtraItem.size}
+                      onChange={(e) => setNewExtraItem({ ...newExtraItem, size: e.target.value })}
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 text-sm font-mono font-black"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 mb-1">الكمية</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0.5"
+                      value={newExtraItem.quantity}
+                      onChange={(e) => setNewExtraItem({ ...newExtraItem, quantity: Number(e.target.value) })}
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 text-sm font-mono font-black"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-blue-800 mb-1">سعر المفرد (د.ع)</label>
+                    <input
+                      type="number"
+                      step="250"
+                      value={newExtraItem.unitPrice}
+                      onChange={(e) => setNewExtraItem({ ...newExtraItem, unitPrice: Number(e.target.value) })}
+                      className="w-full bg-blue-50 border-2 border-blue-300 rounded-xl px-3 py-2 text-blue-950 text-sm font-mono font-black"
+                    />
+                  </div>
+
+                  <div>
+                    <button
+                      type="button"
+                      onClick={handleAddExtraItemToList}
+                      disabled={!newExtraItem.name.trim()}
+                      className="w-full py-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black rounded-xl text-sm flex items-center justify-center gap-1.5 transition shadow-sm"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>إضافة للفاتورة</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Added Extra Items Table/Cards */}
+              {extraItems.length > 0 ? (
+                <div className="space-y-2">
+                  {extraItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between p-3 bg-amber-50/50 border border-amber-200 rounded-2xl"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-amber-500" />
+                        <div>
+                          <strong className="text-slate-950 font-black text-sm block">
+                            {item.name} {item.size ? `(${item.size})` : ''}
+                          </strong>
+                          <span className="text-xs text-slate-600 font-bold">
+                            الكمية: {item.quantity} × {item.unitPrice.toLocaleString()} د.ع
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono font-black text-amber-950 text-base">
+                          {item.totalPrice.toLocaleString()} د.ع
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveExtraItem(item.id)}
+                          className="p-1.5 text-red-500 hover:bg-red-50 rounded-xl transition"
+                          title="حذف المادة"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs font-bold text-slate-500 text-center py-1">
+                  لم تتم إضافة أي مواد إضافية لهذه العملية (اختياري).
+                </p>
+              )}
+            </div>
+
+            {/* 5. Additional Labor / Service Fees (أجور عمل إضافية: فتح وتنظيف بلكات، فتح كيس الكير، فحص...) */}
+            <div className="bg-white border-2 border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between border-b-2 border-slate-100 pb-3">
+                <div className="flex items-center gap-2 text-slate-950 font-black text-lg">
+                  <Wrench className="w-6 h-6 text-amber-600" />
+                  <h2>أجور وأعمال يدوية إضافية (أجور عمل / فتح وتنظيف بلكات / فتح كيس الكير...)</h2>
+                </div>
+                <span className="text-xs font-black bg-emerald-100 text-emerald-950 px-2.5 py-1 rounded-xl">
+                  {additionalServices.length} أجور مضافة
+                </span>
+              </div>
+
+              {/* Quick Labor Shortcuts */}
+              <div className="space-y-1.5">
+                <span className="text-xs font-black text-slate-600 block">اختصارات سريعة للأجور:</span>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { desc: 'فتح وتنظيف البلكات', fee: 10000 },
+                    { desc: 'فتح وتنظيف كيس الكير', fee: 15000 },
+                    { desc: 'تبديل وتنسيم ماء الراديتر', fee: 5000 },
+                    { desc: 'فحص كمبيوتر وتشخيص أعطال', fee: 10000 },
+                    { desc: 'صيانة وفحص أسفل السيارة', fee: 5000 }
+                  ].map((srv) => (
+                    <button
+                      key={srv.desc}
+                      type="button"
+                      onClick={() => handleQuickAddLaborShortcut(srv.desc, srv.fee)}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-emerald-100 hover:text-emerald-950 text-slate-800 rounded-xl text-xs font-black border border-slate-300 transition"
+                    >
+                      + {srv.desc}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Add Labor Inputs */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-black text-slate-800 mb-1">
+                    وصف العمل / الخدمة المنجزة *
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="مثال: فتح وتنظيف البلكات / فتح كيس الكير"
+                    value={newLaborService.description}
+                    onChange={(e) => setNewLaborService({ ...newLaborService, description: e.target.value })}
+                    className="w-full bg-white border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 text-sm font-black focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <label className="block text-xs font-black text-emerald-800 mb-1">
+                      أجور العمل (د.ع)
+                    </label>
+                    <input
+                      type="number"
+                      step="1000"
+                      value={newLaborService.fee}
+                      onChange={(e) => setNewLaborService({ ...newLaborService, fee: Number(e.target.value) })}
+                      className="w-full bg-emerald-50 border-2 border-emerald-300 rounded-xl px-3 py-2 text-emerald-950 text-sm font-mono font-black"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddLaborToList}
+                    disabled={!newLaborService.description.trim()}
+                    className="py-2 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black rounded-xl text-sm flex items-center justify-center gap-1 transition shadow-sm"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Added Labor Services List */}
+              {additionalServices.length > 0 ? (
+                <div className="space-y-2">
+                  {additionalServices.map((srv) => (
+                    <div
+                      key={srv.id}
+                      className="flex items-center justify-between p-3 bg-emerald-50/50 border border-emerald-200 rounded-2xl"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Wrench className="w-4 h-4 text-emerald-700" />
+                        <strong className="text-slate-950 font-black text-sm block">
+                          {srv.description}
+                        </strong>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono font-black text-emerald-900 text-base">
+                          {(Number(srv.price || srv.fee) || 0).toLocaleString()} د.ع
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveLabor(srv.id)}
+                          className="p-1.5 text-red-500 hover:bg-red-50 rounded-xl transition"
+                          title="حذف الخدمة"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs font-bold text-slate-500 text-center py-1">
+                  لم يتم تسجيل أجور عمل إضافية لهذه العملية (اختياري).
+                </p>
+              )}
+            </div>
+
           </div>
 
           {/* Right Column: Checkout & Summary */}
@@ -1213,6 +1704,28 @@ export default function WorkshopPOSPage() {
                     </span>
                   </div>
                 )}
+
+                {/* Extra Items in Summary */}
+                {extraItems.map((item) => (
+                  <div key={item.id} className="flex justify-between items-center py-2 border-b border-slate-200 text-slate-800">
+                    <span className="truncate max-w-[180px]">
+                      {item.name} {item.size ? `(${item.size})` : ''} × {item.quantity}:
+                    </span>
+                    <span className="font-mono font-black text-base text-slate-950">
+                      {item.totalPrice.toLocaleString()} د.ع
+                    </span>
+                  </div>
+                ))}
+
+                {/* Additional Services in Summary */}
+                {additionalServices.map((srv) => (
+                  <div key={srv.id} className="flex justify-between items-center py-2 border-b border-slate-200 text-emerald-900">
+                    <span className="truncate max-w-[180px]">أجور: {srv.description}</span>
+                    <span className="font-mono font-black text-base text-emerald-700">
+                      {(Number(srv.price || srv.fee) || 0).toLocaleString()} د.ع
+                    </span>
+                  </div>
+                ))}
 
                 <div className="pt-2">
                   <label className="block text-sm font-black text-slate-800 mb-1.5">
@@ -1541,9 +2054,19 @@ export default function WorkshopPOSPage() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-slate-800 mb-1 font-black">حجم المحرك</label>
+                  <label className="block text-slate-800 mb-1 font-black text-xs">سنة الصنع / الموديل *</label>
+                  <input
+                    type="number"
+                    required
+                    value={newCarForm.modelYear}
+                    onChange={(e) => setNewCarForm({ ...newCarForm, modelYear: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-800 mb-1 font-black text-xs">حجم المحرك</label>
                   <input
                     type="text"
                     placeholder="مثال: 2.5L"
@@ -1553,7 +2076,7 @@ export default function WorkshopPOSPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-800 mb-1 font-black">العداد الحالي (كم)</label>
+                  <label className="block text-slate-800 mb-1 font-black text-xs">العداد الحالي (كم)</label>
                   <input
                     type="number"
                     value={newCarForm.lastOdometer}
@@ -1625,6 +2148,131 @@ export default function WorkshopPOSPage() {
                 <button
                   type="button"
                   onClick={() => setAddCarModalOpen(false)}
+                  className="px-4 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black rounded-xl"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 3: Quick Edit Active Vehicle Model & Specs */}
+      {quickEditVehicleOpen && vehicle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white border-2 border-slate-300 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b-2 border-slate-100 pb-3">
+              <h2 className="text-base font-black text-slate-950 flex items-center gap-2">
+                <Edit3 className="w-5 h-5 text-amber-600" />
+                <span>تعديل موديل وبيانات السيارة: {vehicle.makeModel}</span>
+              </h2>
+              <button onClick={() => setQuickEditVehicleOpen(false)} className="p-1 text-slate-400 hover:text-slate-800">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveQuickEditVehicle} className="space-y-4 text-sm">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-800 mb-1 font-black">نوع وموديل السيارة *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="مثال: سوناتا / توسان"
+                      value={editVehForm.makeModel}
+                      onChange={(e) => setEditVehForm({ ...editVehForm, makeModel: e.target.value })}
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-black"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-800 mb-1 font-black">سنة الصنع / الموديل *</label>
+                    <input
+                      type="number"
+                      required
+                      value={editVehForm.modelYear}
+                      onChange={(e) => setEditVehForm({ ...editVehForm, modelYear: Number(e.target.value) })}
+                      className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-mono font-black"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-800 mb-1 font-black">حجم المحرك</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: 2.0L أو 2.4L"
+                    value={editVehForm.engineSize}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, engineSize: e.target.value })}
+                    className="w-full bg-white border-2 border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-950 font-mono font-black"
+                  />
+                </div>
+              </div>
+
+              {/* Oil & Filter Preferences */}
+              <div className="bg-amber-50/60 p-4 rounded-2xl border-2 border-amber-300 space-y-3">
+                <span className="font-black text-amber-950 block text-xs">
+                  مواصفات الزيت والفلتر المعتمدة للسيارة:
+                </span>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-slate-700 mb-1 font-black text-xs">كم لتر تأخذ؟</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      placeholder="مثال: 4.5"
+                      value={editVehForm.recommendedLiters}
+                      onChange={(e) => setEditVehForm({ ...editVehForm, recommendedLiters: e.target.value })}
+                      className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 mb-1 font-black text-xs">سايز الزيت</label>
+                    <input
+                      type="text"
+                      placeholder="مثال: 5W30"
+                      value={editVehForm.preferredOil}
+                      onChange={(e) => setEditVehForm({ ...editVehForm, preferredOil: e.target.value })}
+                      className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-slate-950 font-mono font-black"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 mb-1 font-black text-xs">نوع الزيت</label>
+                    <input
+                      type="text"
+                      placeholder="مثال: يورال"
+                      value={editVehForm.preferredOilName}
+                      onChange={(e) => setEditVehForm({ ...editVehForm, preferredOilName: e.target.value })}
+                      className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-slate-950 font-black"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 mb-1 font-black text-xs">نوع الفلتر</label>
+                    <input
+                      type="text"
+                      placeholder="مثال: أصلي"
+                      value={editVehForm.preferredFilter}
+                      onChange={(e) => setEditVehForm({ ...editVehForm, preferredFilter: e.target.value })}
+                      className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-slate-950 font-black"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="submit"
+                  disabled={savingVehicleEdit}
+                  className="flex-1 py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-xl flex items-center justify-center gap-2"
+                >
+                  {savingVehicleEdit ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  <span>حفظ التعديلات على السيارة</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickEditVehicleOpen(false)}
                   className="px-4 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black rounded-xl"
                 >
                   إلغاء

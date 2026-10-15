@@ -1585,13 +1585,34 @@ export default function CustomerDossierPage() {
             <form onSubmit={handleSaveEditVehicle} className="space-y-3.5 text-sm">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-black text-slate-800 mb-1">نوع السيارة *</label>
+                  <label className="block font-black text-slate-800 mb-1">نوع وماركة السيارة *</label>
                   <input
                     type="text"
                     required
                     value={editVehForm.makeModel}
                     onChange={(e) => setEditVehForm({ ...editVehForm, makeModel: e.target.value })}
                     className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">موديل السيارة / سنة الصنع *</label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="مثال: 2023"
+                    value={editVehForm.modelYear}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, modelYear: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
+                  />
+                </div>
+                <div>
+                  <label className="block font-black text-slate-800 mb-1">حجم المحرك</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: 2.0L أو V6"
+                    value={editVehForm.engineSize}
+                    onChange={(e) => setEditVehForm({ ...editVehForm, engineSize: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-slate-300 rounded-xl px-3 py-2 font-mono font-black"
                   />
                 </div>
                 <div>

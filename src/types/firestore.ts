@@ -33,16 +33,20 @@ export type ProductCategory =
   | 'coolant' 
   | 'additive' 
   | 'flush' 
-  | 'anti_smoke';
+  | 'anti_smoke'
+  | 'battery'
+  | 'other';
 
 export const PRODUCT_CATEGORY_LABELS: Record<ProductCategory, string> = {
   engine_oil: 'زيوت المحركات',
   gear_oil: 'زيوت الجير (القير)',
-  filter: 'الفلاتر (زيت / هواء / شاصي)',
+  filter: 'الفلاتر (زيت / هواء / تبريد)',
   coolant: 'مياه الراديترات والمبردات',
   additive: 'المحسنات والمعالجات',
   flush: 'الفلاشات (غسيل محرك)',
-  anti_smoke: 'مانع تبخير وتنقيص'
+  anti_smoke: 'مانع تبخير وتنقيص',
+  battery: 'البطاريات والكهربائيات',
+  other: 'مواد وقطع أخرى'
 };
 
 export interface ProductDoc {
@@ -63,6 +67,24 @@ export interface ProductDoc {
   directSalePrice: number;   // سعر البيع المباشر (فقط بدون خدمة)
   serviceSalePrice: number;  // سعر البيع مع التبديل والخدمة
   salePrice: number;         // Backward compatible default price
+}
+
+export interface ExtraServiceItem {
+  id?: string;
+  productId?: string;
+  name: string;
+  size?: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+  category?: string;
+}
+
+export interface AdditionalServiceLabor {
+  id?: string;
+  description: string; // e.g. "فتح وتنظيف البلكات", "فتح كيس الكير"
+  price: number;
+  fee?: number;
 }
 
 export interface ServiceVisitDoc {
@@ -90,6 +112,10 @@ export interface ServiceVisitDoc {
   gearOilUnitPrice?: number;
   gearOilTotalPrice?: number;
   gearOilDetails?: string;
+  // Extra Materials/Items (ماء راديتر، فلتر تبريد، فلتر هواء، بطارية، محسنات، الخ)
+  extraItems?: ExtraServiceItem[];
+  // Additional Labor/Jobs (أجور إضافية: فتح وتنظيف بلكات، فتح كيس كير، الخ)
+  additionalServices?: AdditionalServiceLabor[];
   // Notes & Financials
   technicalNotes?: string;
   totalPrice: number;

@@ -535,6 +535,8 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
     gearOilUnitPrice,
     gearOilTotalPrice,
     gearOilDetails,
+    extraItems,
+    additionalServices,
     technicalNotes,
     totalPrice,
     paidAmount,
@@ -583,6 +585,22 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       }
     }
 
+    // 1.c Read Extra Products stock if provided
+    const extraProductUpdates: { ref: any; newStock: number }[] = [];
+    if (extraItems && Array.isArray(extraItems)) {
+      for (const item of extraItems) {
+        if (item.productId && item.quantity > 0) {
+          const itemRef = doc(db, 'products', item.productId);
+          const itemSnap = await transaction.get(itemRef);
+          if (itemSnap.exists()) {
+            const currentStock = Number((itemSnap.data() as any)?.totalLitersStock || 0);
+            const newStock = Math.max(0, Number((currentStock - item.quantity).toFixed(2)));
+            extraProductUpdates.push({ ref: itemRef, newStock });
+          }
+        }
+      }
+    }
+
     // 2. Read Customer and Vehicle
     const customerRef = doc(db, 'customers', customerId);
     const customerSnap = await transaction.get(customerRef);
@@ -612,6 +630,11 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       });
     }
 
+    // 3.c Write: Deduct Extra products stock
+    for (const update of extraProductUpdates) {
+      transaction.update(update.ref, { totalLitersStock: update.newStock });
+    }
+
     // 4. Write: Create new service_visits entry
     const newVisitRef = doc(collection(db, 'service_visits'));
     transaction.set(newVisitRef, {
@@ -635,6 +658,8 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       gearOilUnitPrice: Number(gearOilUnitPrice || 0),
       gearOilTotalPrice: Number(gearOilTotalPrice || 0),
       gearOilDetails: gearOilDetails || '',
+      extraItems: extraItems || [],
+      additionalServices: additionalServices || [],
       technicalNotes: technicalNotes || '',
       totalPrice,
       paidAmount,
