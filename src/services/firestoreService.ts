@@ -60,6 +60,31 @@ export function formatExactDateTime(ts: any): string {
   }
 }
 
+// Helper to recursively remove all 'undefined' values and replace with null / default so Firestore never rejects the write
+export function cleanFirestoreObject(obj: any): any {
+  if (obj === null || obj === undefined) return null;
+  if (Array.isArray(obj)) {
+    return obj.map(item => cleanFirestoreObject(item));
+  }
+  if (typeof obj === 'object') {
+    // Firestore Sentinels (serverTimestamp, deleteField, etc.) must be kept as-is
+    if (obj._methodName || (obj.constructor && obj.constructor.name !== 'Object')) {
+      return obj;
+    }
+    const clean: any = {};
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      if (val !== undefined) {
+        clean[key] = cleanFirestoreObject(val);
+      } else {
+        clean[key] = null;
+      }
+    }
+    return clean;
+  }
+  return obj;
+}
+
 // ==============================================================================
 // 0. GET LAST SERVICE VISIT FOR A SPECIFIC VEHICLE
 // ==============================================================================
@@ -636,17 +661,35 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
     }
 
     // 4. Write: Create new service_visits entry
+    const sanitizedExtraItems = (extraItems || []).map((item) => ({
+      id: item.id || '',
+      productId: item.productId || '',
+      name: item.name || '',
+      size: item.size || '',
+      quantity: Number(item.quantity || 1),
+      unitPrice: Number(item.unitPrice || 0),
+      totalPrice: Number(item.totalPrice || 0),
+      category: item.category || ''
+    }));
+
+    const sanitizedAdditionalServices = (additionalServices || []).map((srv) => ({
+      id: srv.id || '',
+      description: srv.description || '',
+      price: Number(srv.price || srv.fee || 0),
+      fee: Number(srv.fee || srv.price || 0)
+    }));
+
     const newVisitRef = doc(collection(db, 'service_visits'));
-    transaction.set(newVisitRef, {
-      vehicleId,
-      customerId,
+    const visitDocData = cleanFirestoreObject({
+      vehicleId: vehicleId || '',
+      customerId: customerId || '',
       visitDate: serverTimestamp(),
-      currentOdometer,
-      nextOdometer,
+      currentOdometer: Number(currentOdometer || 0),
+      nextOdometer: Number(nextOdometer || 0),
       oilProductId: oilProductId || null,
-      oilName,
+      oilName: oilName || 'زيت محرك',
       viscosity: viscosity || '',
-      oilLitersUsed,
+      oilLitersUsed: Number(oilLitersUsed || 0),
       oilUnitPrice: Number(oilUnitPrice || 0),
       oilTotalPrice: Number(oilTotalPrice || 0),
       filterCode: filterCode || '',
@@ -654,28 +697,31 @@ export async function recordServiceVisit(visitData: Omit<ServiceVisitDoc, 'id' |
       gearOilProductId: gearOilProductId || null,
       gearOilName: gearOilName || '',
       gearOilViscosity: gearOilViscosity || '',
-      gearOilLitersUsed: gearLiters,
+      gearOilLitersUsed: Number(gearLiters || 0),
       gearOilUnitPrice: Number(gearOilUnitPrice || 0),
       gearOilTotalPrice: Number(gearOilTotalPrice || 0),
       gearOilDetails: gearOilDetails || '',
-      extraItems: extraItems || [],
-      additionalServices: additionalServices || [],
+      extraItems: sanitizedExtraItems,
+      additionalServices: sanitizedAdditionalServices,
       technicalNotes: technicalNotes || '',
-      totalPrice,
-      paidAmount,
-      debtAmount
+      totalPrice: Number(totalPrice || 0),
+      paidAmount: Number(paidAmount || 0),
+      debtAmount: Number(debtAmount || 0)
     });
+    transaction.set(newVisitRef, visitDocData);
 
     // 5. Write: Update Vehicle odometer & save last used oil/liters/filter for future reference
-    transaction.update(vehicleRef, {
-      lastOdometer: currentOdometer,
-      nextOdometer: nextOdometer,
-      lastServiceDate: serverTimestamp(),
-      ...(oilName ? { preferredOilName: oilName } : {}),
-      ...(viscosity ? { preferredOil: viscosity } : {}),
-      ...(oilLitersUsed ? { recommendedLiters: oilLitersUsed } : {}),
-      ...(filterCode ? { preferredFilter: filterCode } : {})
-    });
+    const vehicleUpdates: any = {
+      lastOdometer: Number(currentOdometer || 0),
+      nextOdometer: Number(nextOdometer || 0),
+      lastServiceDate: serverTimestamp()
+    };
+    if (oilName) vehicleUpdates.preferredOilName = oilName;
+    if (viscosity) vehicleUpdates.preferredOil = viscosity;
+    if (oilLitersUsed) vehicleUpdates.recommendedLiters = Number(oilLitersUsed);
+    if (filterCode) vehicleUpdates.preferredFilter = filterCode;
+
+    transaction.update(vehicleRef, cleanFirestoreObject(vehicleUpdates));
 
     // 6. Write: Update Customer Debt & Loyalty (only if loyalty system is active)
     const customerData = customerSnap.data() as any;

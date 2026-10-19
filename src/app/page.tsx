@@ -319,7 +319,14 @@ export default function WorkshopPOSPage() {
     const prefViscosity = visit?.viscosity || v.preferredOil || '';
 
     let matchedOilProd = products.find(
-      p => p.category === 'engine_oil' && (p.id === visit?.oilProductId || (prefOilName && p.name === prefOilName))
+      p => p.category === 'engine_oil' && (
+        p.id === visit?.oilProductId || 
+        (prefOilName && (
+          p.name.trim() === prefOilName.trim() || 
+          p.name.includes(prefOilName) || 
+          prefOilName.includes(p.name)
+        ))
+      )
     );
     if (!matchedOilProd) {
       matchedOilProd = products.find(p => p.category === 'engine_oil' && p.id === selectedOilId);
@@ -341,6 +348,18 @@ export default function WorkshopPOSPage() {
     const prefFilter = visit?.filterCode || v.preferredFilter || '';
     if (prefFilter) {
       setSelectedFilterSize(prefFilter);
+      const matchedFilter = products.find(
+        p => p.category === 'filter' && (
+          p.name.trim() === prefFilter.trim() || 
+          p.name.includes(prefFilter) || 
+          prefFilter.includes(p.name)
+        )
+      );
+      if (matchedFilter?.id) {
+        setSelectedFilterId(matchedFilter.id);
+        const filterP = matchedFilter.serviceSalePrice || matchedFilter.salePrice || 0;
+        setFilterCustomPrice(filterP);
+      }
     }
   };
 
@@ -463,9 +482,9 @@ export default function WorkshopPOSPage() {
     const price = Number(newExtraItem.unitPrice) || 0;
     const item: ExtraServiceItem = {
       id: `extra_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      productId: newExtraItem.productId || undefined,
+      productId: newExtraItem.productId ? newExtraItem.productId : '',
       name: newExtraItem.name.trim(),
-      size: newExtraItem.size.trim() || undefined,
+      size: newExtraItem.size.trim(),
       quantity: qty,
       unitPrice: price,
       totalPrice: Math.round(qty * price)
@@ -643,29 +662,29 @@ export default function WorkshopPOSPage() {
       const res = await recordServiceVisit({
         customerId: customer.id,
         vehicleId: vehicle.id,
-        currentOdometer: Number(currentOdo),
-        nextOdometer: Number(nextOdo),
-        oilProductId: selectedOilId || undefined,
-        oilName: resolvedOilName,
+        currentOdometer: Number(currentOdo || 0),
+        nextOdometer: Number(nextOdo || 0),
+        oilProductId: selectedOilId || '',
+        oilName: resolvedOilName || 'زيت محرك',
         viscosity: selectedOilSize || selectedOil?.viscosity || '',
-        oilLitersUsed: Number(oilLiters),
-        oilUnitPrice: Number(oilPricePerLiter),
-        oilTotalPrice: Number(oilTotalCustomPrice),
-        filterCode: resolvedFilterCode,
-        filterPrice: resolvedFilterCode ? Number(filterCustomPrice) : 0,
-        gearOilProductId: includeGearOil ? (selectedGearOilId || undefined) : undefined,
+        oilLitersUsed: Number(oilLiters || 0),
+        oilUnitPrice: Number(oilPricePerLiter || 0),
+        oilTotalPrice: Number(oilTotalCustomPrice || 0),
+        filterCode: resolvedFilterCode || '',
+        filterPrice: resolvedFilterCode ? Number(filterCustomPrice || 0) : 0,
+        gearOilProductId: includeGearOil ? (selectedGearOilId || '') : '',
         gearOilName: includeGearOil ? (selectedGear?.name || 'زيت كير') : '',
-        gearOilViscosity: includeGearOil ? selectedGearOilSize : '',
-        gearOilLitersUsed: includeGearOil ? Number(gearOilLiters) : 0,
-        gearOilUnitPrice: includeGearOil ? Number(gearPricePerLiter) : 0,
-        gearOilTotalPrice: includeGearOil ? Number(gearCustomPrice) : 0,
-        gearOilDetails: gearOilNotes,
-        extraItems: extraItems.length > 0 ? extraItems : undefined,
-        additionalServices: additionalServices.length > 0 ? additionalServices : undefined,
-        technicalNotes: techNotes,
-        totalPrice: Number(totalPrice),
-        paidAmount: Number(paidAmount),
-        debtAmount: calculatedDebt
+        gearOilViscosity: includeGearOil ? (selectedGearOilSize || '') : '',
+        gearOilLitersUsed: includeGearOil ? Number(gearOilLiters || 0) : 0,
+        gearOilUnitPrice: includeGearOil ? Number(gearPricePerLiter || 0) : 0,
+        gearOilTotalPrice: includeGearOil ? Number(gearCustomPrice || 0) : 0,
+        gearOilDetails: gearOilNotes || '',
+        extraItems: extraItems && extraItems.length > 0 ? extraItems : [],
+        additionalServices: additionalServices && additionalServices.length > 0 ? additionalServices : [],
+        technicalNotes: techNotes || '',
+        totalPrice: Number(totalPrice || 0),
+        paidAmount: Number(paidAmount || 0),
+        debtAmount: Number(calculatedDebt || 0)
       });
 
       setCustomer((prev) => prev ? {
