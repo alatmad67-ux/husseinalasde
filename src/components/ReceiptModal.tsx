@@ -98,6 +98,46 @@ export default function ReceiptModal({ isOpen, data, onClose }: ReceiptModalProp
     window.open(`https://wa.me/${intlPhone}?text=${msg}`, '_blank');
   };
 
+  // Extract clean Date and Time components from dateTimeStr
+  let datePart = '';
+  let timePart = '';
+  if (data.dateTimeStr) {
+    if (data.dateTimeStr.includes(' - ')) {
+      const parts = data.dateTimeStr.split(' - ');
+      datePart = parts[0]?.trim() || '';
+      timePart = parts[1]?.trim() || '';
+    } else if (data.dateTimeStr.includes('،')) {
+      const parts = data.dateTimeStr.split('،');
+      datePart = parts[0]?.trim() || '';
+      timePart = parts[1]?.trim() || '';
+    } else if (data.dateTimeStr.includes(',')) {
+      const parts = data.dateTimeStr.split(',');
+      datePart = parts[0]?.trim() || '';
+      timePart = parts[1]?.trim() || '';
+    } else {
+      const match = data.dateTimeStr.match(/^(\S+)\s+(.+)$/);
+      if (match) {
+        datePart = match[1];
+        timePart = match[2];
+      } else {
+        datePart = data.dateTimeStr;
+      }
+    }
+  }
+  if (!datePart) {
+    datePart = new Date().toLocaleDateString('ar-IQ');
+  }
+  if (!timePart) {
+    timePart = new Date().toLocaleTimeString('ar-IQ', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  const saleType =
+    data.debtAmount > 0
+      ? data.paidAmount > 0
+        ? 'نقدي + آجل'
+        : 'آجل (دين)'
+      : 'نقدي';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm">
       <div className="bg-white border-2 border-slate-300 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 max-h-[94vh] overflow-y-auto">
@@ -114,7 +154,7 @@ export default function ReceiptModal({ isOpen, data, onClose }: ReceiptModalProp
         </div>
 
         {/* Printable Thermal Receipt Box */}
-        <div id="printable-receipt" className="bg-white border-2 border-dashed border-slate-400 rounded-2xl p-5 text-slate-950 space-y-3 text-sm">
+        <div id="printable-receipt" className="bg-white border-2 border-dashed border-slate-400 rounded-2xl p-5 text-slate-950 space-y-4 text-sm">
           
           <div className="text-center border-b-2 border-slate-900 pb-3 space-y-1.5">
             <div className="w-16 h-16 mx-auto rounded-2xl overflow-hidden border border-amber-500 bg-slate-950">
@@ -125,26 +165,76 @@ export default function ReceiptModal({ isOpen, data, onClose }: ReceiptModalProp
             <p className="text-xs font-mono font-bold">هاتف: 07800505015</p>
           </div>
 
-          <div className="space-y-1.5 text-xs font-bold border-b border-slate-300 pb-2.5">
-            <div className="flex justify-between">
-              <span className="text-slate-600">رقم الوصل:</span>
-              <span className="font-mono font-black">{data.receiptNumber}</span>
+          {/* Invoice Information Bar - Matching Reference Layout */}
+          <div className="relative border border-slate-300 rounded-2xl bg-slate-50/50 p-3 pt-4 space-y-2.5 text-xs">
+            {/* Centered Floating Pill Badge */}
+            <div className="flex justify-center -mt-6 mb-1">
+              <span className="bg-slate-950 text-white text-[11px] font-black px-6 py-0.5 rounded-full shadow-sm tracking-wider">
+                فاتورة مبيعات
+              </span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-slate-600">التاريخ والوقت:</span>
-              <span className="font-mono font-black text-slate-900">{data.dateTimeStr}</span>
+
+            {/* Grid Fields */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {/* Row 1 / Col 1: رقم الفاتورة */}
+              <div className="space-y-0.5">
+                <span className="text-slate-500 font-bold block text-[11px]">رقم الفاتورة:</span>
+                <span className="font-mono font-black text-slate-950 text-xs block">{data.receiptNumber}</span>
+              </div>
+
+              {/* Row 1 / Col 2: التاريخ */}
+              <div className="space-y-0.5">
+                <span className="text-slate-500 font-bold block text-[11px]">التاريخ:</span>
+                <span className="font-mono font-bold text-slate-950 text-xs block">{datePart}</span>
+              </div>
+
+              {/* Row 1 / Col 3: الوقت */}
+              <div className="space-y-0.5">
+                <span className="text-slate-500 font-bold block text-[11px]">الوقت:</span>
+                <span className="font-mono font-bold text-slate-950 text-xs block">{timePart}</span>
+              </div>
+
+              {/* Row 1 / Col 4: نوع البيع */}
+              <div className="space-y-0.5">
+                <span className="text-slate-500 font-bold block text-[11px]">نوع البيع:</span>
+                <span className="font-black text-slate-950 text-xs block">{saleType}</span>
+              </div>
+
+              {/* Row 2 / Col 1: اسم الزبون */}
+              <div className="space-y-0.5">
+                <span className="text-slate-500 font-bold block text-[11px]">اسم الزبون:</span>
+                <span className="font-black text-slate-950 text-xs block truncate" title={data.customerName || 'زبون نقدي'}>
+                  {data.customerName || 'زبون نقدي'}
+                </span>
+              </div>
+
+              {/* Row 2 / Col 2: هاتف الزبون */}
+              <div className="space-y-0.5">
+                <span className="text-slate-500 font-bold block text-[11px]">هاتف الزبون:</span>
+                <span className="font-mono font-bold text-slate-950 text-xs block">{data.customerPhone || '---'}</span>
+              </div>
+
+              {/* Row 2 / Col 3: السيارة واللوحة */}
+              <div className="space-y-0.5">
+                <span className="text-slate-500 font-bold block text-[11px]">السيارة واللوحة:</span>
+                <span className="font-black text-slate-950 text-xs block">
+                  {data.vehicleModel || 'بدون تحديد'}
+                  {data.plateNumber ? ` (${data.plateNumber})` : ''}
+                </span>
+              </div>
+
+              {/* Row 2 / Col 4: المستخدم والمستودع */}
+              <div className="space-y-0.5">
+                <span className="text-slate-500 font-bold block text-[11px]">المستخدم / المستودع:</span>
+                <span className="font-bold text-slate-950 text-xs block">كاشير المركز / الرئيسي</span>
+              </div>
             </div>
-            <div className="flex justify-between">
-              <span className="text-slate-600">اسم الزبون:</span>
-              <span className="font-black text-sm">{data.customerName}</span>
-            </div>
-            <div className="flex justify-between items-center pt-1">
-              <span className="text-slate-600">السيارة واللوحة:</span>
-              <span className="font-black">{data.vehicleModel}</span>
-            </div>
-            <div className="flex justify-center py-1">
-              <IraqiPlateBadge plateNumber={data.plateNumber} size="sm" />
-            </div>
+
+            {data.plateNumber && (
+              <div className="flex justify-center pt-1.5 border-t border-slate-200">
+                <IraqiPlateBadge plateNumber={data.plateNumber} size="sm" />
+              </div>
+            )}
           </div>
 
           {/* Odometer Box */}
